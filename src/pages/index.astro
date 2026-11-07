@@ -1,0 +1,99 @@
+---
+import '../styles/site.css';
+import { ICONS } from '../lib/icons.ts';
+---
+
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#1F1F1F" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#EBEBEB" media="(prefers-color-scheme: light)" />
+    <title>Sổ Canh Giá Shopee</title>
+    <meta name="description" content="Theo dõi giá các phân loại hàng trong giỏ Shopee và báo qua Telegram khi giá chạm đáy." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/Geist-400-latin.woff2" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/Geist-500-latin.woff2" />
+  </head>
+  <body>
+    <a href="#main" class="skip">Chuyển tới danh sách giá</a>
+
+    <header class="bar">
+      <div class="bar-in">
+        <div class="bar-row">
+          <h1 class="brand">Sổ Canh Giá Shopee</h1>
+          <nav class="seg" aria-label="Chế độ xem">
+            <button type="button" data-view="cart" aria-current="page">Giỏ hàng <span class="n" id="count-cart">0</span></button>
+            <button type="button" data-view="worth">Đáng chốt <span class="n is-deal" id="count-worth">0</span></button>
+            <button type="button" data-view="connect">Kết nối</button>
+          </nav>
+          <div id="tools" class="tools">
+            <div class="search">
+              <label for="search" class="vh">Tìm món hoặc shop</label>
+              <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['magnifying-glass']} />
+              <input id="search" type="search" class="input" placeholder="Tìm món, shop" autocomplete="off" />
+              <kbd aria-hidden="true">/</kbd>
+            </div>
+            <div class="sel">
+              <label for="sort" class="vh">Sắp xếp</label>
+              <select id="sort" class="input">
+                <option value="deal">Ưu tiên giá tốt</option>
+                <option value="cart">Thứ tự trong giỏ</option>
+                <option value="price">Giá thấp đến cao</option>
+              </select>
+              <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['caret-down']} />
+            </div>
+          </div>
+        </div>
+        <div class="bar-sub"><p id="sync-meta" class="summary" role="status">Đang tải...</p></div>
+      </div>
+    </header>
+
+    <main id="main" class="content">
+      <div id="ledger"><div id="list"></div></div>
+      <div id="connect" hidden></div>
+    </main>
+
+    <dialog id="dialog" class="dialog" aria-labelledby="dialog-title">
+      <div class="dialog-body">
+        <div class="dialog-head">
+          <div>
+            <h2 id="dialog-title" class="dialog-title"></h2>
+            <p id="dialog-sub" class="muted"></p>
+          </div>
+          <button id="dialog-close" type="button" class="icbtn" aria-label="Đóng">
+            <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['x']} />
+          </button>
+        </div>
+
+        <div class="chart-box">
+          <p id="chart-legend" class="muted small"></p>
+          <div id="chart"></div>
+        </div>
+
+        <form id="target-form">
+          <label for="target" class="label">Báo Telegram khi giá về mức (VNĐ)</label>
+          <input
+            id="target"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            class="input"
+            placeholder="Để trống: chỉ báo khi lập đáy mới hoặc Live giảm sâu"
+          />
+          <div id="presets" class="presets"></div>
+          <label class="check"><input id="mute" type="checkbox" /> Tắt báo Telegram cho món này</label>
+          <p id="dialog-feedback" class="feedback" role="status" aria-live="polite"></p>
+          <button id="save" type="submit" class="btn primary">Lưu</button>
+        </form>
+      </div>
+    </dialog>
+
+    <script>
+      import '../client/app.ts';
+    </script>
+  </body>
+</html>

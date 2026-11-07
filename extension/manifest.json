@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Sổ Canh Giá Shopee",
+  "version": "0.2.0",
+  "description": "Đọc giá giỏ hàng Shopee định kỳ mỗi 3 đến 6 giờ trên Chrome đang đăng nhập và đồng bộ lên Sổ Canh Giá cá nhân.",
+  "permissions": ["alarms", "storage", "tabs", "scripting"],
+  "host_permissions": ["https://shopee.vn/*", "https://shopee.phamkhanhminhman.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Sổ Canh Giá Shopee" }
+}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sổ Canh Giá Shopee</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #181818; --surface: #1f1f1f; --ink: #ededed; --muted: #9b9b9b; --border: #6b6b6b;
+        --accent: #e2a656; --on-accent: #131209;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f5f5f5; --surface: #ffffff; --ink: #171717; --muted: #5c5c5c; --border: #858585;
+          --accent: #7a4212; --on-accent: #ffffff;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; width: 300px; padding: 16px; background: var(--bg); color: var(--ink); font: 14px/20px system-ui, -apple-system, sans-serif; }
+      h1 { margin: 0 0 12px; font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -0.02em; }
+      #status { margin-bottom: 12px; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px; background: var(--surface); color: var(--muted); }
+      #status.ok { color: var(--ink); }
+      #status.err { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+      button, select, a { font: inherit; min-height: 44px; border-radius: 8px; cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: 0.6; }
+      #scan { width: 100%; border: 0; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+      select { border: 1px solid var(--border); background: var(--surface); color: var(--ink); padding: 0 8px; }
+      a { display: inline-flex; align-items: center; color: var(--ink); font-weight: 500; }
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <h1>Sổ Canh Giá Shopee</h1>
+    <div id="status" role="status">Chưa có lượt quét nào.</div>
+    <button id="scan" type="button">Quét giỏ hàng ngay</button>
+    <div class="row">
+      <label for="interval">Tự quét mỗi</label>
+      <select id="interval">
+        <option value="3">3 giờ</option>
+        <option value="4">4 giờ</option>
+        <option value="6">6 giờ</option>
+      </select>
+    </div>
+    <div class="row"><a href="https://shopee.phamkhanhminhman.com" target="_blank" rel="noreferrer">Mở sổ canh giá</a></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

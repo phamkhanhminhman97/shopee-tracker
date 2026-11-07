@@ -1,0 +1,10 @@
+{
+  "name": "Sổ Canh Giá Shopee",
+  "short_name": "Canh giá",
+  "description": "Theo dõi giá các phân loại hàng trong giỏ Shopee và báo qua Telegram khi giá chạm đáy.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#181818",
+  "theme_color": "#1F1F1F",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "shopee-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "dev": "astro dev --host 127.0.0.1",
+    "ext:build": "node --experimental-strip-types scripts/build-extension.ts",
+    "build": "astro build",
+    "preview": "wrangler dev --ip 127.0.0.1 --port 8788",
+    "check": "astro check && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.extension.json --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "db:local": "wrangler d1 migrations apply shopee-tracker --local",
+    "cf:setup": "node --experimental-strip-types scripts/setup-cloudflare.ts",
+    "verify": "npm run ext:build && npm run check && npm test && npm run build",
+    "deploy:check": "wrangler deploy --dry-run --outdir .output",
+    "deploy": "npm run verify && wrangler deploy"
+  },
+  "dependencies": {
+    "astro": "7.4.5"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.12",
+    "@types/node": "22.19.0",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261103.0-beta",
+    "typescript": "6.0.3",
+    "wrangler": "4.157.0"
+  }
+}

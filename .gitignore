@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.astro/
+.wrangler/
+.output/
+.dev.vars
+.DS_Store
+checks/*.png
+extension/content-scrape.js
