@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Giỏ hàng mẫu</title>
+  <style>.sr { position: absolute; clip: rect(0 0 0 0); width: 1px; height: 1px; overflow: hidden }</style>
+</head>
+<body>
+  <div id="cart"></div>
+  <template id="first">
+    <section>
+      <h3>Shop Section</h3><a href="/gian-a?entryPoint=cart">MallGian A</a>
+      <div>
+        <h4>cart_accessibility_item</h4>
+        <a href="/tai-nghe-i.111.1001?xptdk=fixture">Tai nghe mẫu A</a>
+        <div>Flash Sale ends at 17:00:00</div>
+        <div>Variations:</div><div>Trắng</div>
+        <div>529.000₫</div><div class="sr">Total price: 529.000₫</div>
+        <div>Streaming Price at 398.000₫</div>
+      </div>
+      <div>
+        <h4>cart_accessibility_item</h4>
+        <a href="/tai-nghe-i.111.1002">Tai nghe mẫu B</a>
+        <div>13% cheaper since added to cart</div>
+        <div>Phân loại hàng: Đen</div><div>539.000₫</div>
+      </div>
+      <div>Up to 60k₫ off voucher available</div>
+    </section>
+  </template>
+  <template id="later">
+    <section>
+      <h3>Shop Section</h3><a href="/gian-b?entryPoint=cart">Preferred Seller PlusGian B</a>
+      <div>
+        <h4>cart_accessibility_item</h4>
+        <a href="/coc-i.222.2001">Cốc mẫu</a>
+        <div>Variations:</div><div>Xanh min</div>
+        <div><del>259.000₫</del></div><div>199.000₫</div>
+      </div>
+      <!--partial-->
+    </section>
+    <section>
+      <h3>Number of inactive items: 1</h3>
+      <div><h4>cart_accessibility_item</h4><div>INVALID</div><a href="/x-i.333.3001">Túi mẫu</a><div>57.140₫</div></div>
+    </section>
+  </template>
+  <script>
+    const cart = document.getElementById('cart');
+    const add = id => cart.append(document.getElementById(id).content.cloneNode(true));
+    setTimeout(() => add('first'), 250);
+    setTimeout(() => add('later'), 1400);
+  </script>
+</body>
+</html>

@@ -11,18 +11,18 @@ export function escapeHtml(input: string): string {
   return input.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-const MAX_LISTED = 12;
+const MAX_LISTED = 10;
 
 export function buildAlertMessageHtml(alerts: AlertCandidate[], appUrl: string): string {
   const blocks = alerts.slice(0, MAX_LISTED).map(({ item, deal }, index) => {
     const title = item.title.length > 88 ? item.title.slice(0, 85).trim() + '...' : item.title;
     const lines = [
-      index + 1 + '. <b>' + escapeHtml(title) + '</b>' + (item.variation ? ' [' + escapeHtml(item.variation) + ']' : ''),
+      index + 1 + '. <b>' + escapeHtml(title) + '</b>' + (item.variation ? ' [' + escapeHtml(item.variation.slice(0, 40)) + ']' : ''),
       '   Giá tốt nhất: <b>' + formatVnd(item.effectivePrice) + '</b> (' + deal.channel + ')',
       '   ' + escapeHtml(deal.reason),
     ];
     if (deal.channel === 'Shopee Live') lines.push('   Giỏ thường: ' + formatVnd(item.unitPrice));
-    if (item.voucherHint) lines.push('   ' + escapeHtml(localizeShopeeNote(item.voucherHint)));
+    if (item.voucherHint) lines.push('   ' + escapeHtml(localizeShopeeNote(item.voucherHint).slice(0, 60)));
     lines.push('   <a href="' + escapeHtml(item.productUrl) + '">Mở trên Shopee</a>');
     return lines.join('\n');
   });
@@ -58,12 +58,13 @@ export async function sendTelegramHtml(
     const res = await fetchImpl('https://api.telegram.org/bot' + token + '/sendMessage', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(10_000),
       body: JSON.stringify({ chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true }),
     });
     const body = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
     if (!res.ok || !body.ok) return { ok: false, error: body.description || 'HTTP ' + res.status };
     return { ok: true, messageId: body.result?.message_id };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } catch {
+    return { ok: false, error: 'Không kết nối được với Telegram' };
   }
 }

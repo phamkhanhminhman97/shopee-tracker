@@ -1,9 +1,12 @@
-import type { CartSnapshotItem, UpdateItemPayload } from '../lib/model.ts';
 import { evaluateDeal } from '../lib/deal.ts';
 import type { Env } from './env.d.ts';
+import { InputError, isPrice, parseSnapshot, readJson, requireWriteHeader } from './input.ts';
+import { checkSyncHealth } from './monitor.ts';
 import {
   getAppState,
   getItemHistory,
+  claimUntil,
+  releaseClaim,
   markAlertsDelivered,
   recordSyncRun,
   updateItemSettings,
@@ -11,13 +14,19 @@ import {
 } from './store.ts';
 import { buildAlertMessageHtml, buildTestMessageHtml, sendTelegramHtml } from './telegram.ts';
 
-const MAX_SNAPSHOT_ITEMS = 200;
-
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' },
   });
+}
+
+function cartKey(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    throw new InputError('Mã phân loại không hợp lệ');
+  }
 }
 
 export async function handleApiRequest(
@@ -45,63 +54,77 @@ export async function handleApiRequest(
 
     const history = /^\/api\/items\/([^/]+)\/history$/.exec(path);
     if (history && method === 'GET') {
-      return json({ points: await getItemHistory(env.DB, decodeURIComponent(history[1])) });
+      return json({ points: await getItemHistory(env.DB, cartKey(history[1])) });
     }
 
     const item = /^\/api\/items\/([^/]+)$/.exec(path);
     if (item && method === 'PATCH') {
-      const payload = (await request.json()) as UpdateItemPayload;
-      const { targetPrice, alertMuted } = payload;
-      if (targetPrice !== undefined && targetPrice !== null && !(Number.isFinite(targetPrice) && targetPrice > 0)) {
+      requireWriteHeader(request);
+      const { targetPrice, alertMuted } = await readJson(request);
+      if (targetPrice !== undefined && targetPrice !== null && !isPrice(targetPrice)) {
         return json({ ok: false, error: 'Giá canh không hợp lệ' }, 400);
       }
       if (alertMuted !== undefined && typeof alertMuted !== 'boolean') {
         return json({ ok: false, error: 'Giá trị tắt báo không hợp lệ' }, 400);
       }
-      const found = await updateItemSettings(env.DB, decodeURIComponent(item[1]), { targetPrice, alertMuted });
+      const found = await updateItemSettings(env.DB, cartKey(item[1]), { targetPrice, alertMuted });
       return found ? json({ ok: true }) : json({ ok: false, error: 'Không tìm thấy sản phẩm' }, 404);
     }
 
     if (path === '/api/sync/cart' && method === 'POST') {
-      const body = (await request.json()) as { source?: string; items?: CartSnapshotItem[] };
-      if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > MAX_SNAPSHOT_ITEMS) {
-        return json({ ok: false, error: 'Danh sách giỏ hàng phải có từ 1 đến ' + MAX_SNAPSHOT_ITEMS + ' món' }, 400);
-      }
+      requireWriteHeader(request);
+      const body = await readJson(request);
+      const items = parseSnapshot(body);
+      const source = typeof body.source === 'string' && /^[a-z0-9-]{1,48}$/.test(body.source) ? body.source : 'chrome';
+      const now = Date.now();
+      const claim = (now + 120_000) + ':' + crypto.randomUUID();
+      if (!await claimUntil(env.DB, 'sync_lock', claim, now)) throw new InputError('Đang xử lý lượt đồng bộ khác.', 409);
 
-      const sync = await upsertCartSnapshot(env.DB, body.items);
-      let alertsSent = 0;
-      let telegramOk: boolean | null = null;
-      let note = '';
+      try {
+        const sync = await upsertCartSnapshot(env.DB, items);
+        if (!sync) throw new InputError('Giỏ thay đổi nhiều. Hãy quét lại để xác nhận danh sách mới.', 409);
+        let alertsSent = 0;
+        let telegramOk: boolean | null = null;
+        let note = '';
 
-      if (sync.alerts.length > 0) {
-        if (telegramConfigured) {
-          const sent = await sendTelegramHtml(env, buildAlertMessageHtml(sync.alerts, appUrl), fetchImpl);
-          telegramOk = sent.ok;
-          if (sent.ok) {
-            alertsSent = sync.alerts.length;
-            await markAlertsDelivered(env.DB, sync.alerts);
-            note = 'Đã báo ' + alertsSent + ' món về Telegram';
+        if (sync.alerts.length > 0) {
+          if (telegramConfigured) {
+            const sent = await sendTelegramHtml(env, buildAlertMessageHtml(sync.alerts, appUrl), fetchImpl);
+            telegramOk = sent.ok;
+            if (sent.ok) {
+              alertsSent = sync.alerts.length;
+              await markAlertsDelivered(env.DB, sync.alerts, sync.syncedAt);
+              note = 'Đã báo ' + alertsSent + ' món về Telegram';
+            } else {
+              note = 'Gửi Telegram lỗi: ' + (sent.error || 'không rõ');
+            }
           } else {
-            note = 'Gửi Telegram lỗi: ' + (sent.error || 'không rõ');
+            note = sync.alerts.length + ' món đáng chốt nhưng chưa cấu hình Telegram';
           }
-        } else {
-          note = sync.alerts.length + ' món đáng chốt nhưng chưa cấu hình Telegram';
         }
-      }
 
-      const run = await recordSyncRun(env.DB, {
-        syncedAt: sync.syncedAt,
-        source: (body.source || 'chrome').slice(0, 48),
-        totalInCart: sync.total,
-        changedCount: sync.changed,
-        alertsSent,
-        telegramOk,
-        note,
-      });
-      return json({ ok: true, run, alertsSent });
+        const run = await recordSyncRun(env.DB, {
+          syncedAt: sync.syncedAt,
+          source,
+          totalInCart: sync.total,
+          changedCount: sync.changed,
+          alertsSent,
+          telegramOk,
+          note,
+        });
+        return json({ ok: true, run, alertsSent });
+      } finally {
+        await releaseClaim(env.DB, 'sync_lock', claim);
+      }
     }
 
     if (path === '/api/telegram/test' && method === 'POST') {
+      requireWriteHeader(request);
+      if (!telegramConfigured) throw new InputError('Chưa cấu hình Telegram', 503);
+      const now = Date.now();
+      if (!await claimUntil(env.DB, 'telegram_test', String(now + 60_000), now)) {
+        throw new InputError('Chờ một phút rồi gửi lại tin thử.', 429);
+      }
       const state = await getAppState(env.DB, telegramConfigured);
       const worthCount = state.items.filter(i => evaluateDeal(i).isWorth).length;
       const sent = await sendTelegramHtml(env, buildTestMessageHtml(worthCount, appUrl), fetchImpl);
@@ -112,11 +135,19 @@ export async function handleApiRequest(
 
     return json({ ok: false, error: 'Không tìm thấy đường dẫn API' }, 404);
   } catch (err) {
-    return json({ ok: false, error: err instanceof Error ? err.message : 'Lỗi máy chủ nội bộ' }, 500);
+    if (err instanceof InputError) return json({ ok: false, error: err.message }, err.status);
+    const route = path.startsWith('/api/items/')
+      ? '/api/items/:key'
+      : ['/api/health', '/api/state', '/api/sync/cart', '/api/telegram/test'].includes(path) ? path : 'unknown';
+    console.error({ event: 'api_error', method, route, error: err instanceof Error ? err.name : 'unknown' });
+    return json({ ok: false, error: 'Lỗi máy chủ nội bộ' }, 500);
   }
 }
 
 export default {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    await checkSyncHealth(env, controller.scheduledTime);
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     if (new URL(request.url).pathname.startsWith('/api/')) return handleApiRequest(request, env);
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response('Not Found', { status: 404 });

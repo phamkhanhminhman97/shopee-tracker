@@ -74,6 +74,7 @@ export function parseCartRowLines(raw: RawCartRow): CartSnapshotItem | null {
   // Giá hiện hành là giá không bị gạch ngang. Nếu không đọc được kiểu gạch ngang,
   // dòng giá đầu lớn hơn dòng thứ hai (khi có từ 3 dòng giá) là giá gốc.
   const struck = raw.struckPrices.map(parseVndInteger).filter((p): p is number => p !== null);
+  if (struck.length === 0 && prices.length === 2 && prices[0] !== prices[1]) return null;
   let unitPrice = prices.filter(p => !struck.includes(p))[0];
   if (struck.length === 0 && prices.length >= 3 && prices[0] > prices[1]) unitPrice = prices[1];
   if (!unitPrice || unitPrice <= 0) return null;
@@ -99,7 +100,7 @@ function textLines(el: Element): string[] {
   return ((el as HTMLElement).innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
 }
 
-export function extractShopeeCartFromDom(doc: Document, win?: Window): CartSnapshotItem[] {
+export function extractShopeeCartFromDom(doc: Document, win?: Window, stats?: { activeRows: number }): CartSnapshotItem[] {
   const items: CartSnapshotItem[] = [];
   let shopName = '';
   let shopVoucher = '';
@@ -128,6 +129,9 @@ export function extractShopeeCartFromDom(doc: Document, win?: Window): CartSnaps
 
     if (tag !== 'H4' || text !== 'cart_accessibility_item' || !el.parentElement) continue;
     const row = el.parentElement;
+    const lines = textLines(row);
+    if (inInactiveSection || lines.some(line => /^(invalid|không hợp lệ|hết hàng|ngưng bán)$/i.test(line))) continue;
+    if (stats) stats.activeRows++;
     const productLinks = Array.from(row.querySelectorAll('a[href]')).filter(a =>
       PRODUCT_HREF.test(a.getAttribute('href') || '')
     );
@@ -156,7 +160,7 @@ export function extractShopeeCartFromDom(doc: Document, win?: Window): CartSnaps
       productHref: href,
       title: (link.textContent || '').trim() || link.getAttribute('title') || '',
       imageUrl: (row.querySelector('img[src*="susercontent.com"]') || row.querySelector('img[src]'))?.getAttribute('src') || '',
-      lines: textLines(row),
+      lines,
       struckPrices,
       voucherHint: inInactiveSection ? '' : shopVoucher,
       inInactiveSection,

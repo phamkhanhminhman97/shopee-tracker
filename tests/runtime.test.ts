@@ -5,6 +5,9 @@ import test from 'node:test';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { handleApiRequest } from '../src/worker/index.ts';
 import type { Env } from '../src/worker/env.d.ts';
+import { checkSyncHealth } from '../src/worker/monitor.ts';
+import { markAlertsDelivered, recordSyncRun, upsertCartSnapshot } from '../src/worker/store.ts';
+import type { AppStateResponse, CartSnapshotItem } from '../src/lib/model.ts';
 
 async function openDb() {
   const mf = new Miniflare(
@@ -15,7 +18,7 @@ async function openDb() {
       d1Databases: ['DB'],
     })
   );
-  return { mf, db: await mf.getD1Database('DB') };
+  return { mf, db: await mf.getD1Database('DB') as D1Database };
 }
 
 async function migrate(db: D1Database, file: string) {
@@ -23,7 +26,7 @@ async function migrate(db: D1Database, file: string) {
   for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run();
 }
 
-const snapshotItem = (overrides: Record<string, unknown> = {}) => ({
+const snapshotItem = (overrides: Partial<CartSnapshotItem> = {}): CartSnapshotItem => ({
   shopId: '254666730',
   itemId: '28016604566',
   shopName: 'Elmich Việt Nam Chính Hãng',
@@ -40,15 +43,42 @@ const snapshotItem = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, không báo lặp, món rời giỏ biến mất', async () => {
+async function migrateAll(db: D1Database) {
+  for (const file of ['0001_init.sql', '0002_trim.sql', '0003_tracker_state.sql', '0004_price_baselines.sql']) {
+    await migrate(db, file);
+  }
+}
+
+const writeHeaders = { 'content-type': 'application/json', 'x-shopee-tracker': '1' };
+
+test('lỗi D1 có log theo đường dẫn, API trả lỗi chung', async t => {
   const { mf, db } = await openDb();
   try {
-    await migrate(db, '0001_init.sql');
-    await migrate(db, '0002_trim.sql');
+    const log = t.mock.method(console, 'error', () => {});
+    const response = await handleApiRequest(new Request('https://example.com/api/state'), { DB: db });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { ok: false, error: 'Lỗi máy chủ nội bộ' });
+    assert.equal(log.mock.callCount(), 1);
+    assert.deepEqual(log.mock.calls[0].arguments, [
+      { event: 'api_error', method: 'GET', route: '/api/state', error: 'Error' },
+    ]);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, không báo lặp, món rời giỏ biến mất', { timeout: 15_000 }, async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
 
     const messages: string[] = [];
+    let onSend: (() => Promise<void>) | undefined;
     const fakeFetch: typeof fetch = async (_input, init) => {
       messages.push((JSON.parse(String(init?.body)) as { text: string }).text);
+      const hold = onSend;
+      onSend = undefined;
+      await hold?.();
       return Response.json({ ok: true, result: { message_id: 100 + messages.length } });
     };
     const env: Env = { DB: db, TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_CHAT_ID: '-1', APP_PUBLIC_URL: 'https://shopee.example' };
@@ -57,7 +87,7 @@ test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, 
     const sync = async (items: unknown[]) =>
       (await (await call('/api/sync/cart', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: writeHeaders,
         body: JSON.stringify({ source: 'test', items }),
       })).json()) as { ok: boolean; alertsSent: number; run: { totalInCart: number; changedCount: number } };
 
@@ -65,10 +95,24 @@ test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, 
     assert.equal(first.alertsSent, 0);
     assert.equal(first.run.changedCount, 1);
 
-    const drop = await sync([snapshotItem({ unitPrice: 159_000 })]);
-    assert.equal(drop.alertsSent, 1);
+    let reached = () => {};
+    let release = () => {};
+    const sending = new Promise<void>(resolve => { reached = resolve; });
+    const finishSend = new Promise<void>(resolve => { release = resolve; });
+    onSend = () => { reached(); return finishSend; };
+    const drop = sync([snapshotItem({ unitPrice: 159_000 })]);
+    await sending;
+    try {
+      const overlap = await call('/api/sync/cart', {
+        method: 'POST', headers: writeHeaders, body: JSON.stringify({ items: [snapshotItem({ unitPrice: 159_000 })] }),
+      });
+      assert.equal(overlap.status, 409);
+    } finally {
+      release();
+    }
+    assert.equal((await drop).alertsSent, 1);
     assert.equal(messages.length, 1);
-    assert.match(messages[0], /Đáy mới/);
+    assert.match(messages[0], /Đáy giá giỏ/);
     assert.equal(messages[0].includes('—'), false);
 
     assert.equal((await sync([snapshotItem({ unitPrice: 159_000 })])).alertsSent, 0);
@@ -83,17 +127,18 @@ test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, 
     const key = encodeURIComponent('1:2:default');
     const patched = await call('/api/items/' + key, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
+      headers: writeHeaders,
       body: JSON.stringify({ targetPrice: 120_000, alertMuted: true }),
     });
     assert.equal(patched.status, 200);
-    assert.equal((await call('/api/items/' + key, { method: 'PATCH', body: JSON.stringify({ targetPrice: -5 }) })).status, 400);
-    assert.equal((await call('/api/items/khong-co', { method: 'PATCH', body: '{}' })).status, 404);
-    assert.equal((await call('/api/sync/cart', { method: 'POST', body: JSON.stringify({ items: [] }) })).status, 400);
+    assert.equal((await call('/api/items/' + key, { method: 'PATCH', headers: writeHeaders, body: JSON.stringify({ targetPrice: -5 }) })).status, 400);
+    assert.equal((await call('/api/items/khong-co', { method: 'PATCH', headers: writeHeaders, body: '{}' })).status, 404);
+    assert.equal((await call('/api/sync/cart', { method: 'POST', headers: writeHeaders, body: JSON.stringify({ items: [] }) })).status, 400);
 
-    const test = await call('/api/telegram/test', { method: 'POST' });
+    const test = await call('/api/telegram/test', { method: 'POST', headers: writeHeaders });
     assert.equal(test.status, 200);
     assert.equal(messages.length, 2);
+    assert.equal((await call('/api/telegram/test', { method: 'POST', headers: writeHeaders })).status, 429);
   } finally {
     await mf.dispose();
   }
@@ -127,6 +172,120 @@ test('migration 0002 giữ lịch sử giá, đưa món inactive ra khỏi giỏ
       assert.equal(columns.includes(dropped), false, dropped);
     }
     assert.equal(columns.includes('first_effective_price'), true);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('cảnh báo đồng bộ gửi lại khi Telegram lỗi, chỉ báo một lần và báo hồi phục', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
+    const now = Date.parse('2026-11-07T12:00:00Z');
+    const sync = (at: number) => recordSyncRun(db, {
+      syncedAt: new Date(at).toISOString(), source: 'chrome-alarm', totalInCart: 1,
+      changedCount: 0, alertsSent: 0, telegramOk: null, note: '',
+    });
+    const env: Env = { DB: db, TELEGRAM_BOT_TOKEN: 'fake', TELEGRAM_CHAT_ID: '-1' };
+    const messages: string[] = [];
+    const fakeFetch: typeof fetch = async (_input, init) => {
+      messages.push(JSON.parse(String(init?.body)).text);
+      return Response.json({ ok: true });
+    };
+    await sync(now - 8 * 3_600_000);
+    await checkSyncHealth(env, now, fakeFetch);
+    assert.equal(messages.length, 0);
+    const later = now + 3_600_000;
+    await assert.rejects(checkSyncHealth(env, later, async () => Response.json({ ok: false })));
+    await checkSyncHealth(env, later, fakeFetch);
+    await checkSyncHealth(env, later + 1000, fakeFetch);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /Đã 9 giờ/);
+    await sync(later);
+    await checkSyncHealth(env, later + 1000, fakeFetch);
+    await checkSyncHealth(env, later + 2000, fakeFetch);
+    assert.equal(messages.length, 2);
+    assert.match(messages[1], /đã đồng bộ lại/);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('từ chối dữ liệu sai trước khi ghi; giỏ giảm mạnh cần xác nhận; link Shopee dựng từ mã', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
+    const env: Env = { DB: db };
+    const cart = Array.from({ length: 5 }, (_, i) => snapshotItem({ shopId: '1', itemId: String(i + 1) }));
+    const sync = (body: unknown, headers: HeadersInit = writeHeaders) => handleApiRequest(new Request(
+      'https://example.com/api/sync/cart', { method: 'POST', headers, body: JSON.stringify(body) }
+    ), env);
+    const state = async () => {
+      const response = await handleApiRequest(new Request('https://example.com/api/state'), env);
+      return await response.json() as AppStateResponse;
+    };
+    assert.equal((await sync({ items: cart }, { 'content-type': 'text/plain' })).status, 403);
+    assert.equal((await sync({ items: cart }, { 'x-shopee-tracker': '1' })).status, 415);
+    assert.equal((await sync({ items: [{ ...cart[0], unitPrice: '1' }] })).status, 400);
+    assert.equal((await sync({ items: cart, extra: 'x'.repeat(512 * 1024) })).status, 413);
+    assert.equal((await sync(null)).status, 400);
+    const broken = await handleApiRequest(new Request('https://example.com/api/sync/cart', {
+      method: 'POST', headers: writeHeaders, body: '{"items":',
+    }), env);
+    assert.equal(broken.status, 400);
+    assert.equal(broken.headers.get('x-robots-tag'), 'noindex, nofollow');
+    assert.equal((await handleApiRequest(new Request('https://example.com/api/items/%E0%A4%A/history'), env)).status, 400);
+    assert.equal((await sync({ items: cart.map(item => ({ ...item, productUrl: 'https://example.com/phish' })) })).status, 200);
+    assert.equal((await state()).items[0].productUrl, 'https://shopee.vn/product/1/1');
+    assert.equal((await sync({ items: [cart[0]] })).status, 409);
+    assert.equal((await state()).items.length, 5);
+    assert.equal((await sync({ items: [cart[1]] })).status, 409);
+    assert.equal((await sync({ items: [cart[1]] })).status, 200);
+    assert.equal((await state()).items.length, 1);
+    assert.equal((await sync({ items: [], cartEmpty: true })).status, 409);
+    assert.equal((await sync({ items: [], cartEmpty: true })).status, 200);
+    assert.equal((await state()).items.length, 0);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('mốc giá giỏ từ lịch sử, Live có giãn cách riêng, biểu đồ lấy điểm mới nhất', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrate(db, '0001_init.sql');
+    await migrate(db, '0002_trim.sql');
+    const key = '254666730:28016604566:xanh min';
+    const first = '2026-11-06T00:00:00.000Z';
+    await db.prepare(`INSERT INTO cart_items (cart_key, shop_id, item_id, title, variation, product_url, unit_price,
+      streaming_price, effective_price, first_effective_price, min_effective_price, first_seen_at)
+      VALUES (?, '254666730', '28016604566', 'Cốc', 'Xanh min', '', 389000, 359000, 359000, 359000, 359000, ?)`)
+      .bind(key, first).run();
+    await db.prepare('INSERT INTO price_history (cart_key, recorded_at, unit_price, streaming_price) VALUES (?, ?, 389000, 359000)')
+      .bind(key, first).run();
+    await migrate(db, '0003_tracker_state.sql');
+    await migrate(db, '0004_price_baselines.sql');
+    const sync = async (unitPrice: number, streamingPrice: number | null, hour: number) => {
+      const at = new Date(Date.parse(first) + hour * 3_600_000).toISOString();
+      const run = await upsertCartSnapshot(db, [snapshotItem({ unitPrice, streamingPrice })], at);
+      assert.ok(run);
+      await markAlertsDelivered(db, run.alerts, at);
+      return run.alerts.map(alert => alert.deal.kind);
+    };
+    assert.deepEqual(await sync(389_000, 359_000, 1), ['live']);
+    assert.deepEqual(await sync(389_000, null, 2), []);
+    assert.deepEqual(await sync(389_000, 359_000, 3), []);
+    assert.deepEqual(await sync(389_000, 359_000, 14), ['live']);
+    assert.deepEqual(await sync(350_000, null, 15), ['low']);
+    assert.deepEqual(await sync(350_000, null, 16), []);
+    await db.prepare(`WITH RECURSIVE prices(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM prices WHERE n<250)
+      INSERT INTO price_history (cart_key, recorded_at, unit_price) SELECT ?, ?, 400000+n FROM prices`)
+      .bind(key, first).run();
+    const history = await handleApiRequest(new Request('https://example.com/api/items/' + encodeURIComponent(key) + '/history'), { DB: db });
+    const { points } = await history.json() as { points: Array<{ unitPrice: number }> };
+    assert.equal(points.length, 200);
+    assert.equal(points[0].unitPrice, 400_051);
+    assert.equal(points.at(-1)?.unitPrice, 400_250);
   } finally {
     await mf.dispose();
   }

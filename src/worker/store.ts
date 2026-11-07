@@ -11,6 +11,25 @@ import {
 } from '../lib/model.ts';
 import type { AlertCandidate } from './telegram.ts';
 
+export function getTrackerState(db: D1Database, key: string): Promise<string | null> {
+  return db.prepare('SELECT value FROM tracker_state WHERE key = ?').bind(key).first<string>('value');
+}
+
+export async function setTrackerState(db: D1Database, key: string, value: string): Promise<void> {
+  await db.prepare('INSERT OR REPLACE INTO tracker_state (key, value) VALUES (?, ?)').bind(key, value).run();
+}
+
+export async function claimUntil(db: D1Database, key: string, value: string, now: number): Promise<boolean> {
+  const result = await db.prepare(
+    'INSERT INTO tracker_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE CAST(tracker_state.value AS INTEGER) <= ?'
+  ).bind(key, value, now).run();
+  return result.meta.changes === 1;
+}
+
+export async function releaseClaim(db: D1Database, key: string, value: string): Promise<void> {
+  await db.prepare('DELETE FROM tracker_state WHERE key = ? AND value = ?').bind(key, value).run();
+}
+
 interface ItemRow {
   cart_key: string;
   shop_id: string;
@@ -26,6 +45,9 @@ interface ItemRow {
   effective_price: number;
   first_effective_price: number;
   min_effective_price: number;
+  first_unit_price: number;
+  min_unit_price: number;
+  min_streaming_price: number | null;
   target_price: number | null;
   voucher_hint: string;
   flash_sale_text: string;
@@ -33,6 +55,9 @@ interface ItemRow {
   in_cart: number;
   alert_muted: number;
   last_alerted_price: number | null;
+  last_low_alert_price: number | null;
+  last_live_alert_price: number | null;
+  last_live_alert_at: string | null;
   first_seen_at: string;
 }
 
@@ -55,7 +80,7 @@ function toItem(row: ItemRow): TrackedItem {
     shopName: row.shop_name,
     title: row.title,
     variation: row.variation,
-    productUrl: row.product_url,
+    productUrl: 'https://shopee.vn/product/' + encodeURIComponent(row.shop_id) + '/' + encodeURIComponent(row.item_id),
     imageUrl: row.image_url,
     cartOrder: row.cart_order,
     unitPrice: row.unit_price,
@@ -63,12 +88,18 @@ function toItem(row: ItemRow): TrackedItem {
     effectivePrice: row.effective_price,
     firstEffectivePrice: row.first_effective_price,
     minEffectivePrice: row.min_effective_price,
+    firstUnitPrice: row.first_unit_price || row.unit_price,
+    minUnitPrice: row.min_unit_price || row.unit_price,
+    minStreamingPrice: row.min_streaming_price,
     targetPrice: row.target_price,
     voucherHint: row.voucher_hint,
     flashSaleText: row.flash_sale_text,
     cartDropBadge: row.cart_drop_badge,
     alertMuted: row.alert_muted === 1,
     lastAlertedPrice: row.last_alerted_price,
+    lastLowAlertPrice: row.last_low_alert_price,
+    lastLiveAlertPrice: row.last_live_alert_price,
+    lastLiveAlertAt: row.last_live_alert_at,
     firstSeenAt: row.first_seen_at,
   };
 }
@@ -102,10 +133,10 @@ export async function getAppState(db: D1Database, telegramConfigured: boolean): 
 
 export async function getItemHistory(db: D1Database, cartKey: string): Promise<PricePoint[]> {
   const res = await db
-    .prepare('SELECT recorded_at, unit_price, streaming_price FROM price_history WHERE cart_key = ? ORDER BY id LIMIT 200')
+    .prepare('SELECT recorded_at, unit_price, streaming_price FROM price_history WHERE cart_key = ? ORDER BY id DESC LIMIT 200')
     .bind(cartKey)
     .all<{ recorded_at: string; unit_price: number; streaming_price: number | null }>();
-  return (res.results ?? []).map(r => ({
+  return (res.results ?? []).reverse().map(r => ({
     recordedAt: r.recorded_at,
     unitPrice: r.unit_price,
     streamingPrice: r.streaming_price,
@@ -126,17 +157,31 @@ export async function upsertCartSnapshot(
   db: D1Database,
   snapshot: CartSnapshotItem[],
   now: string = new Date().toISOString()
-): Promise<SyncResult> {
-  const seen = new Map<string, CartSnapshotItem>();
-  for (const item of snapshot) {
-    if (!item.shopId || !item.itemId || !(item.unitPrice > 0)) continue;
-    const key = buildCartKey(item.shopId, item.itemId, item.variation || '');
-    if (!seen.has(key)) seen.set(key, { ...item, cartOrder: seen.size });
+): Promise<SyncResult | null> {
+  const existing = new Map<string, ItemRow>();
+  const legacyKeys = new Map<string, string>();
+  for (const row of (await db.prepare('SELECT * FROM cart_items ORDER BY in_cart, cart_key').all<ItemRow>()).results ?? []) {
+    existing.set(row.cart_key, row);
+    legacyKeys.set(buildCartKey(row.shop_id, row.item_id, row.variation), row.cart_key);
   }
 
-  const existing = new Map<string, ItemRow>();
-  for (const row of (await db.prepare('SELECT * FROM cart_items').all<ItemRow>()).results ?? []) {
-    existing.set(row.cart_key, row);
+  const seen = new Map<string, CartSnapshotItem>();
+  for (const item of snapshot) {
+    const key = buildCartKey(item.shopId, item.itemId, item.variation);
+    seen.set(existing.has(key) ? key : legacyKeys.get(key) ?? key, item);
+  }
+
+  const active = [...existing.values()].filter(row => row.in_cart === 1);
+  const kept = active.filter(row => seen.has(row.cart_key)).length;
+  const shrink = (active.length >= 5 && kept * 2 < active.length) || (active.length > 0 && seen.size === 0);
+  const signature = shrink ? JSON.stringify([...seen.keys()].sort()) : '';
+  const pending = await getTrackerState(db, 'pending_cart');
+  const separator = pending?.indexOf('\n') ?? -1;
+  const matches = pending && separator > 0 && pending.slice(separator + 1) === signature &&
+    Date.parse(now) - Number(pending.slice(0, separator)) <= 60 * 60_000;
+  if (shrink && !matches) {
+    await setTrackerState(db, 'pending_cart', Date.parse(now) + '\n' + signature);
+    return null;
   }
 
   const statements: D1PreparedStatement[] = [];
@@ -150,6 +195,7 @@ export async function upsertCartSnapshot(
 
   for (const [key, snap] of seen) {
     const effective = computeEffectivePrice(snap.unitPrice, snap.streamingPrice);
+    const live = effective < snap.unitPrice ? effective : null;
     const old = existing.get(key);
     let tracked: TrackedItem;
 
@@ -158,11 +204,12 @@ export async function upsertCartSnapshot(
       statements.push(
         db
           .prepare(
-            'INSERT INTO cart_items (cart_key, shop_id, item_id, shop_name, title, variation, product_url, image_url, cart_order, unit_price, streaming_price, effective_price, first_effective_price, min_effective_price, voucher_hint, flash_sale_text, cart_drop_badge, first_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO cart_items (cart_key, shop_id, item_id, shop_name, title, variation, product_url, image_url, cart_order, unit_price, streaming_price, effective_price, first_effective_price, min_effective_price, first_unit_price, min_unit_price, min_streaming_price, voucher_hint, flash_sale_text, cart_drop_badge, first_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
           )
           .bind(
             key, snap.shopId, snap.itemId, snap.shopName, snap.title, snap.variation, snap.productUrl, snap.imageUrl,
             snap.cartOrder, snap.unitPrice, snap.streamingPrice, effective, effective, effective,
+            snap.unitPrice, snap.unitPrice, live,
             snap.voucherHint, snap.flashSaleText, snap.cartDropBadge, now
           ),
         recordPrice(key, snap)
@@ -182,12 +229,18 @@ export async function upsertCartSnapshot(
         effectivePrice: effective,
         firstEffectivePrice: effective,
         minEffectivePrice: effective,
+        firstUnitPrice: snap.unitPrice,
+        minUnitPrice: snap.unitPrice,
+        minStreamingPrice: live,
         targetPrice: null,
         voucherHint: snap.voucherHint,
         flashSaleText: snap.flashSaleText,
         cartDropBadge: snap.cartDropBadge,
         alertMuted: false,
         lastAlertedPrice: null,
+        lastLowAlertPrice: null,
+        lastLiveAlertPrice: null,
+        lastLiveAlertAt: null,
         firstSeenAt: now,
       };
     } else {
@@ -201,15 +254,19 @@ export async function upsertCartSnapshot(
           ? null
           : old.last_alerted_price;
       const minPrice = Math.min(old.min_effective_price, effective);
+      const firstUnit = old.first_unit_price || old.unit_price;
+      const minUnit = Math.min(old.min_unit_price || old.unit_price, snap.unitPrice);
+      const minLive = live === null ? old.min_streaming_price : Math.min(live, old.min_streaming_price ?? live);
+      const lastLive = live === null ? null : old.last_live_alert_price;
       statements.push(
         db
           .prepare(
-            'UPDATE cart_items SET shop_name = ?, title = ?, product_url = ?, image_url = ?, cart_order = ?, unit_price = ?, streaming_price = ?, effective_price = ?, min_effective_price = ?, voucher_hint = ?, flash_sale_text = ?, cart_drop_badge = ?, last_alerted_price = ?, in_cart = 1 WHERE cart_key = ?'
+            'UPDATE cart_items SET shop_name = ?, title = ?, product_url = ?, image_url = ?, cart_order = ?, unit_price = ?, streaming_price = ?, effective_price = ?, min_effective_price = ?, first_unit_price = ?, min_unit_price = ?, min_streaming_price = ?, voucher_hint = ?, flash_sale_text = ?, cart_drop_badge = ?, last_alerted_price = ?, last_live_alert_price = ?, in_cart = 1 WHERE cart_key = ?'
           )
           .bind(
             snap.shopName || old.shop_name, snap.title || old.title, snap.productUrl, snap.imageUrl || old.image_url,
-            snap.cartOrder, snap.unitPrice, snap.streamingPrice, effective, minPrice,
-            snap.voucherHint, snap.flashSaleText, snap.cartDropBadge, lastAlerted, key
+            snap.cartOrder, snap.unitPrice, snap.streamingPrice, effective, minPrice, firstUnit, minUnit, minLive,
+            snap.voucherHint, snap.flashSaleText, snap.cartDropBadge, lastAlerted, lastLive, key
           )
       );
       tracked = {
@@ -223,15 +280,18 @@ export async function upsertCartSnapshot(
         streamingPrice: snap.streamingPrice,
         effectivePrice: effective,
         minEffectivePrice: minPrice,
+        minUnitPrice: minUnit,
+        minStreamingPrice: minLive,
         voucherHint: snap.voucherHint,
         flashSaleText: snap.flashSaleText,
         cartDropBadge: snap.cartDropBadge,
         lastAlertedPrice: lastAlerted,
+        lastLiveAlertPrice: lastLive,
       };
     }
 
     const deal = evaluateDeal(tracked);
-    if (shouldAlert(tracked, deal)) alerts.push({ item: tracked, deal });
+    if (shouldAlert(tracked, deal, Date.parse(now))) alerts.push({ item: tracked, deal });
   }
 
   for (const [key, row] of existing) {
@@ -241,15 +301,20 @@ export async function upsertCartSnapshot(
   }
 
   await runBatched(db, statements);
+  if (pending) await setTrackerState(db, 'pending_cart', '');
   return { syncedAt: now, total: seen.size, changed, alerts };
 }
 
-export async function markAlertsDelivered(db: D1Database, alerts: AlertCandidate[]): Promise<void> {
+export async function markAlertsDelivered(db: D1Database, alerts: AlertCandidate[], at: string): Promise<void> {
   await runBatched(
     db,
-    alerts.map(({ item }) =>
-      db.prepare('UPDATE cart_items SET last_alerted_price = ? WHERE cart_key = ?').bind(item.effectivePrice, item.cartKey)
-    )
+    alerts.map(({ item, deal }) => {
+      if (deal.kind === 'low') return db.prepare('UPDATE cart_items SET last_low_alert_price = ? WHERE cart_key = ?')
+        .bind(item.unitPrice, item.cartKey);
+      if (deal.kind === 'live') return db.prepare('UPDATE cart_items SET last_live_alert_price = ?, last_live_alert_at = ? WHERE cart_key = ?')
+        .bind(item.effectivePrice, at, item.cartKey);
+      return db.prepare('UPDATE cart_items SET last_alerted_price = ? WHERE cart_key = ?').bind(item.effectivePrice, item.cartKey);
+    })
   );
 }
 

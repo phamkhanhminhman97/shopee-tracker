@@ -3,7 +3,7 @@ import { ICONS } from '../lib/icons.ts';
 import {
   formatVnd,
   localizeShopeeNote,
-  parseVndInteger,
+  parseTargetPrice,
   type AppStateResponse,
   type PricePoint,
   type TrackedItem,
@@ -23,15 +23,22 @@ const SOURCE_LABELS: Record<string, string> = {
   'chrome-alarm': 'Tự động',
   'chrome-manual': 'Bấm tay',
   'chrome-startup': 'Mở Chrome',
+  'chrome-retry': 'Thử lại',
 };
 
 let data: AppStateResponse | null = null;
+let lastPayload = '';
+let requestVersion = 0;
 let loadError = '';
 let loadedAt = 0;
 let view: View = 'cart';
 let query = '';
 let sort: Sort = 'deal';
 let dialogKey: string | null = null;
+let redrawChart: (() => void) | null = null;
+let telegramSending = false;
+let telegramFeedback = '';
+let telegramFeedbackError = false;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const esc = (s: string): string =>
@@ -78,8 +85,7 @@ function renderChrome(): void {
   $('count-cart').textContent = data ? String(items.length) : '';
   $('count-worth').textContent = data ? String(items.filter(i => evaluateDeal(i).isWorth).length) : '';
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-view]')) {
-    if (tab.dataset.view === view) tab.setAttribute('aria-current', 'page');
-    else tab.removeAttribute('aria-current');
+    tab.setAttribute('aria-pressed', String(tab.dataset.view === view));
   }
 
   let message: string;
@@ -95,8 +101,11 @@ function renderChrome(): void {
       ? 'Đã ' + Math.floor(hours) + ' giờ chưa đồng bộ. Kiểm tra Chrome và tiện ích.'
       : 'Cập nhật ' + ago(data.lastSyncedAt) + (data.telegramConfigured ? ' · Telegram đang bật' : ' · Chưa bật Telegram');
   }
-  $('sync-meta').innerHTML = (stale ? icon('warning') : '') + '<span>' + esc(message) + '</span>';
-  $('sync-meta').classList.toggle('is-stale', stale);
+  const summary = $('sync-meta');
+  if (summary.textContent !== message || summary.classList.contains('is-stale') !== stale) {
+    summary.innerHTML = (stale ? icon('warning') : '') + '<span>' + esc(message) + '</span>';
+    summary.classList.toggle('is-stale', stale);
+  }
 }
 
 function emptyState(iconName: string, title: string, body: string, action = '', role = ''): string {
@@ -122,6 +131,7 @@ function renderRow({ item, deal }: Row): string {
     ? `<img class="thumb" src="${esc(thumbUrl(item.imageUrl))}" alt="" width="56" height="56" loading="lazy" referrerpolicy="no-referrer" />`
     : '<span class="thumb" aria-hidden="true"></span>';
 
+  const targetLabel = item.targetPrice ? 'Sửa giá canh' : 'Đặt giá canh';
   return `<article class="row${deal.isWorth ? ' is-worth' : ''}">
     ${thumb}
     <div class="body">
@@ -135,7 +145,7 @@ function renderRow({ item, deal }: Row): string {
       ${notes.map(n => '<p class="price-note">' + esc(n) + '</p>').join('')}
     </div>
     <div class="actions">
-      <button type="button" class="btn" data-open="${esc(item.cartKey)}">${item.targetPrice ? 'Sửa giá canh' : 'Đặt giá canh'}</button>
+      <button type="button" class="btn" data-open="${esc(item.cartKey)}" aria-label="${targetLabel}: ${esc(item.title + (item.variation ? ', ' + item.variation : ''))}">${targetLabel}</button>
       <a class="icbtn" href="${esc(item.productUrl)}" target="_blank" rel="noreferrer" aria-label="Mở trên Shopee: ${esc(item.title)}" title="Mở trên Shopee">${icon('arrow-square-out')}</a>
     </div>
   </article>`;
@@ -199,9 +209,9 @@ function renderConnect(): void {
   const telegram = `<section class="panel">
       <h2>Telegram</h2>
       <p>${data?.telegramConfigured
-        ? 'Đã kết nối. Bot chỉ nhắn khi có món chạm giá canh, lập đáy mới hoặc có giá Live giảm sâu.'
+        ? 'Đã kết nối. Bot báo giá tốt và nhắc khi tiện ích ngừng đồng bộ.'
         : 'Chưa cấu hình Telegram trên Worker.'}</p>
-      <button id="telegram-test" type="button" class="btn"${data?.telegramConfigured ? '' : ' disabled'}>Gửi tin thử</button>
+      <button id="telegram-test" type="button" class="btn">Gửi tin thử</button>
       <p id="telegram-feedback" class="feedback" role="status" aria-live="polite"></p>
     </section>`;
   const body = runs
@@ -215,34 +225,43 @@ function renderConnect(): void {
     .join('');
   const table = runs.length
     ? `<section class="panel wide">
-        <h2>Các lượt quét gần đây</h2>
-        <table>
+        <h2 id="runs-title">Các lượt quét gần đây</h2>
+        <div id="runs-scroll" class="table-scroll" role="region" aria-labelledby="runs-title" tabindex="0"><table>
           <thead><tr><th>Lúc</th><th>Cách quét</th><th>Giỏ hàng</th><th>Thay đổi</th><th>Kết quả</th></tr></thead>
           <tbody>${body}</tbody>
-        </table>
+        </table></div>
       </section>`
     : '';
   $('connect').innerHTML = `<div class="panels">${setup}${telegram}</div>${table}`;
 
-  const test = document.getElementById('telegram-test') as HTMLButtonElement | null;
-  const feedback = $('telegram-feedback');
-  test?.addEventListener('click', async () => {
-    test.disabled = true;
-    feedback.className = 'feedback';
-    feedback.textContent = 'Đang gửi...';
+  const test = $<HTMLButtonElement>('telegram-test');
+  updateTelegramFeedback();
+  test.addEventListener('click', async () => {
+    telegramSending = true;
+    telegramFeedbackError = false;
+    telegramFeedback = 'Đang gửi...';
+    updateTelegramFeedback();
     try {
-      const res = await fetch('/api/telegram/test', { method: 'POST' });
+      const res = await fetch('/api/telegram/test', { method: 'POST', headers: { 'x-shopee-tracker': '1' } });
       const body = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !body.ok) throw new Error(body.error || 'HTTP ' + res.status);
-      feedback.className = 'feedback is-ok';
-      feedback.textContent = 'Đã gửi tin thử vào nhóm Telegram.';
+      telegramFeedback = 'Đã gửi tin thử vào nhóm Telegram.';
     } catch (err) {
-      feedback.className = 'feedback is-err';
-      feedback.textContent = 'Gửi thất bại: ' + (err instanceof Error ? err.message : String(err));
+      telegramFeedbackError = true;
+      telegramFeedback = 'Gửi thất bại: ' + (err instanceof Error ? err.message : String(err));
     } finally {
-      test.disabled = false;
+      telegramSending = false;
+      updateTelegramFeedback();
     }
   });
+}
+
+function updateTelegramFeedback(): void {
+  const test = $<HTMLButtonElement>('telegram-test');
+  test.disabled = telegramSending || !data?.telegramConfigured;
+  const feedback = $('telegram-feedback');
+  feedback.classList.toggle('is-err', telegramFeedbackError);
+  feedback.textContent = telegramFeedback;
 }
 
 function render(): void {
@@ -256,21 +275,44 @@ function render(): void {
 }
 
 async function load(): Promise<void> {
+  const version = ++requestVersion;
   try {
-    const res = await fetch('/api/state');
+    const res = await fetch('/api/state', { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error('Máy chủ trả mã ' + res.status);
-    data = (await res.json()) as AppStateResponse;
-    loadError = '';
+    const payload = await res.text();
+    if (version !== requestVersion) return;
     loadedAt = Date.now();
+    if (payload === lastPayload) {
+      renderChrome();
+      return;
+    }
+    data = JSON.parse(payload) as AppStateResponse;
+    lastPayload = payload;
+    loadError = '';
   } catch (err) {
+    if (version !== requestVersion) return;
+    if (data) {
+      renderChrome();
+      return;
+    }
     if (!data) loadError = err instanceof TypeError ? 'Không kết nối được tới máy chủ.' : err instanceof Error ? err.message : String(err);
   }
+  const focused = document.activeElement;
+  const rowKey = focused?.closest('.row')?.querySelector<HTMLElement>('[data-open]')?.dataset.open;
+  const rowControl = rowKey ? '[data-open="' + CSS.escape(rowKey) + '"]' : '';
+  const scroll = $('runs-scroll')?.scrollLeft;
   render();
+  if (scroll && $('runs-scroll')) $('runs-scroll').scrollLeft = scroll;
+  if (focused && !focused.isConnected) {
+    const button = rowControl ? document.querySelector<HTMLElement>(rowControl) : null;
+    const target = rowControl ? (focused.tagName === 'A' ? button?.nextElementSibling : button) : $(focused.id);
+    if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+    else document.querySelector<HTMLElement>('[data-view="' + view + '"]')?.focus({ preventScroll: true });
+  }
 }
 
 /* Biểu đồ bậc thang: nét đậm là giá mua tốt nhất, nét đứt là giá giỏ thường */
-function renderChart(points: PricePoint[], item: TrackedItem): string {
-  const W = 560;
+function renderChart(points: PricePoint[], item: TrackedItem, W: number): string {
   const H = 150;
   const pad = { l: 10, r: 10, t: 16, b: 24 };
   const series: PricePoint[] = points.length
@@ -278,6 +320,11 @@ function renderChart(points: PricePoint[], item: TrackedItem): string {
     : [{ recordedAt: item.firstSeenAt, unitPrice: item.unitPrice, streamingPrice: item.streamingPrice, effectivePrice: item.effectivePrice }];
 
   const values = series.flatMap(p => [p.effectivePrice, p.unitPrice]);
+  const bestPrices = series.map(p => p.effectivePrice);
+  const minBest = formatVnd(Math.min(...bestPrices));
+  const maxBest = formatVnd(Math.max(...bestPrices));
+  const range = minBest === maxBest ? 'Giá ghi nhận: ' + minBest : 'Thấp nhất ' + minBest + ' · Cao nhất ' + maxBest;
+  $('chart-range').textContent = range;
   if (item.targetPrice) values.push(item.targetPrice);
   let lo = Math.min(...values);
   let hi = Math.max(...values);
@@ -293,7 +340,7 @@ function renderChart(points: PricePoint[], item: TrackedItem): string {
 
   const target = item.targetPrice
     ? `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(item.targetPrice).toFixed(1)}" y2="${y(item.targetPrice).toFixed(1)}" stroke="var(--ink-2)" stroke-width="1" />
-       <text x="${W - pad.r}" y="${Math.max(12, y(item.targetPrice) - 5).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="var(--ink-2)">Giá canh ${formatVnd(item.targetPrice)}</text>`
+       <text x="${W - pad.r}" y="${Math.max(30, y(item.targetPrice) - 5).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="var(--ink-2)">Giá canh ${formatVnd(item.targetPrice)}</text>`
     : '';
   const lines =
     series.length > 1
@@ -306,7 +353,7 @@ function renderChart(points: PricePoint[], item: TrackedItem): string {
       ? `<text x="${W - pad.r}" y="${H - 6}" text-anchor="end" font-size="12" fill="var(--muted)">${esc(shortDate(series[series.length - 1].recordedAt))}</text>`
       : '');
 
-  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ lịch sử giá">
+  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ lịch sử giá. ${range}">
     <line x1="${pad.l}" x2="${W - pad.r}" y1="${H - pad.b}" y2="${H - pad.b}" stroke="var(--line)" />
     ${lines}${target}${dots}${axis}
   </svg>`;
@@ -330,18 +377,25 @@ async function openDialog(key: string): Promise<void> {
 
   $('presets').innerHTML = [5, 10, 15]
     .map(pct => {
-      const value = Math.round((item.unitPrice * (100 - pct)) / 100 / 1000) * 1000;
-      return `<button type="button" class="btn" data-preset="${value}">Giảm ${pct}% (${formatVnd(value)})</button>`;
+      const value = Math.floor(item.effectivePrice * (100 - pct) / 100);
+      return value > 0
+        ? `<button type="button" class="btn" data-preset="${value}">Giảm ${pct}% (${formatVnd(value)})</button>`
+        : '';
     })
     .join('');
 
-  $('chart').innerHTML = renderChart([], item);
+  const chart = $('chart');
+  let points: PricePoint[] = [];
+  const draw = () => { chart.innerHTML = renderChart(points, item, Math.max(1, chart.clientWidth)); };
+  redrawChart = draw;
   $<HTMLDialogElement>('dialog').showModal();
+  draw();
 
   try {
     const res = await fetch('/api/items/' + encodeURIComponent(key) + '/history');
-    if (res.ok && dialogKey === key) {
-      $('chart').innerHTML = renderChart(((await res.json()) as { points: PricePoint[] }).points, item);
+    if (res.ok) {
+      points = ((await res.json()) as { points: PricePoint[] }).points;
+      if (redrawChart === draw) draw();
     }
   } catch {
     /* biểu đồ một điểm vẫn dùng được */
@@ -352,10 +406,10 @@ async function saveSettings(): Promise<void> {
   if (!dialogKey) return;
   const feedback = $('dialog-feedback');
   const raw = $<HTMLInputElement>('target').value.trim();
-  const target = raw === '' ? null : parseVndInteger(raw);
+  const target = raw === '' ? null : parseTargetPrice(raw);
   if (raw !== '' && target === null) {
     feedback.className = 'feedback is-err';
-    feedback.textContent = 'Nhập số tiền VNĐ hợp lệ, ví dụ 350000.';
+    feedback.textContent = 'Nhập số tiền VNĐ hợp lệ, ví dụ 350000 hoặc 350k.';
     return;
   }
 
@@ -364,14 +418,16 @@ async function saveSettings(): Promise<void> {
   try {
     const res = await fetch('/api/items/' + encodeURIComponent(dialogKey), {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-shopee-tracker': '1' },
       body: JSON.stringify({ targetPrice: target, alertMuted: $<HTMLInputElement>('mute').checked }),
     });
     const body = (await res.json()) as { ok?: boolean; error?: string };
     if (!res.ok || !body.ok) throw new Error(body.error || 'HTTP ' + res.status);
     await load();
     feedback.className = 'feedback is-ok';
-    feedback.textContent = target ? 'Đã lưu giá canh ' + formatVnd(target) + '.' : 'Đã lưu.';
+    const current = data?.items.find(item => item.cartKey === dialogKey)?.effectivePrice;
+    feedback.textContent = target ? 'Đã lưu giá canh ' + formatVnd(target) + '.'
+      + (current !== undefined && current <= target ? ' Giá hiện tại đã chạm mức này.' : '') : 'Đã lưu.';
   } catch (err) {
     feedback.className = 'feedback is-err';
     feedback.textContent = 'Không lưu được: ' + (err instanceof Error ? err.message : String(err));
@@ -411,16 +467,28 @@ function bind(): void {
       render();
     }
   });
+  $('list').addEventListener('error', e => {
+    if (!(e.target instanceof HTMLImageElement)) return;
+    const placeholder = document.createElement('span');
+    placeholder.className = 'thumb';
+    placeholder.setAttribute('aria-hidden', 'true');
+    e.target.replaceWith(placeholder);
+  }, true);
 
   const dialog = $<HTMLDialogElement>('dialog');
+  new ResizeObserver(() => redrawChart?.()).observe($('chart'));
   $('dialog-close').addEventListener('click', () => dialog.close());
+  let startedOnBackdrop = false;
+  dialog.addEventListener('pointerdown', e => { startedOnBackdrop = e.target === dialog; });
   dialog.addEventListener('click', e => {
-    if (e.target === dialog) dialog.close();
+    if (startedOnBackdrop && e.target === dialog) dialog.close();
+    startedOnBackdrop = false;
   });
   dialog.addEventListener('close', () => {
     // Danh sách được vẽ lại sau khi lưu, nên tìm lại nút theo mã món thay vì giữ nút cũ.
     const key = dialogKey;
     dialogKey = null;
+    redrawChart = null;
     if (key) document.querySelector<HTMLElement>('[data-open="' + CSS.escape(key) + '"]')?.focus();
   });
   $('presets').addEventListener('click', e => {
@@ -433,9 +501,12 @@ function bind(): void {
   });
 
   // Sổ được cập nhật mỗi vài giờ từ Chrome: quay lại tab thì tải bản mới nếu đã cũ.
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && Date.now() - loadedAt > REFETCH_AFTER_MS) void load();
-  });
+  const refresh = () => {
+    if (document.hidden || Date.now() - loadedAt < REFETCH_AFTER_MS) return;
+    void load();
+  };
+  document.addEventListener('visibilitychange', refresh);
+  window.setInterval(refresh, 5 * 60_000);
 
   document.addEventListener('keydown', e => {
     const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;

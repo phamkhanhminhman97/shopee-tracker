@@ -1,46 +1,25 @@
 import https from 'node:https';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { chromePath } from './chrome.mjs';
 
-const EXT = '/Users/man/Documents/minhman-workspace/websites/shopee-tracker/extension';
-const fmt = n => n.toLocaleString('vi-VN') + '₫';
-const state = { captcha: false, posts: [], cartHits: 0 };
+const EXT = fileURLToPath(new URL('../extension/', import.meta.url));
+const tmp = mkdtempSync(join(tmpdir(), 'shopee-extension-'));
+const key = join(tmp, 'key.pem');
+const cert = join(tmp, 'cert.pem');
+execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=localhost', '-days', '1', '-keyout', key, '-out', cert], { stdio: 'ignore' });
+const fixture = readFileSync(new URL('../tests/fixtures/cart.html', import.meta.url), 'utf8');
+const state = { captcha: false, partial: false, unavailable: false, posts: [], cartHits: 0 };
+const cartPage = () => state.partial
+  ? fixture.replace('<!--partial-->', '<div><h4>cart_accessibility_item</h4><p>Không có giá hoặc liên kết</p></div>')
+  : fixture;
 
-function rowHtml(shopId, itemId, title, variation, price, opts = {}) {
-  const href = '/' + encodeURIComponent(title) + '-i.' + shopId + '.' + itemId + '?xptdk=abc';
-  const struck = opts.struck ? '<del>' + fmt(opts.struck) + '</del>' : '';
-  const live = opts.live ? '<div>Streaming Price at ' + fmt(opts.live) + '</div>' : '';
-  const flash = opts.flash ? '<div>Flash Sale ends at 17:00:00</div>' : '';
-  const badge = opts.badge ? '<div>13% cheaper since added to cart</div>' : '';
-  return '<div class="item"><h4>cart_accessibility_item</h4><input type="checkbox">' +
-    '<a href="' + href + '"><img src="https://down-vn.img.susercontent.com/file/' + itemId + '" width="40" height="40"></a>' +
-    '<a href="' + href + '">' + (opts.prefix || '') + title + '</a>' + flash + badge +
-    '<div>Variations:</div><div>' + variation + '</div>' +
-    '<div>' + struck + '</div><span>' + fmt(price) + '</span><span class="a11y-hidden">Total price: ' + fmt(price) + '</span>' + live +
-    '<button>Delete</button></div>';
-}
-
-function cartPage() {
-  const shopA = '<section><h3>Shop Section</h3><input type="checkbox"><a href="/baseusofficial?entryPoint=cart">MallBaseus Official Mall</a><div>' +
-    rowHtml(111, 1001, 'Tai nghe Baseus BS2', 'Trắng', 529000, { live: 398000, flash: true }) +
-    rowHtml(111, 1002, 'Tai nghe Baseus BP1', 'Đen', 539000, { badge: true }) +
-    '</div><div>Up to 60k₫ off voucher available</div><button>More Vouchers</button></section>';
-  const shopB = '<section><h3>Shop Section</h3><a href="/elmich?entryPoint=cart">Preferred Seller PlusElmich Việt Nam</a><div>' +
-    rowHtml(222, 2001, 'Cốc giữ nhiệt Elmich', 'Xanh min', 199000, { struck: 259000 }) +
-    '</div></section>';
-  const inactive = '<section><h3>Number of inactive items: 1</h3><div><h4>cart_accessibility_item</h4><div>INVALID</div>' +
-    '<a href="/x-i.333.3001"><img src="https://down-vn.img.susercontent.com/file/3001"></a><a href="/x-i.333.3001">Add-OnTúi Baseus mini</a>' +
-    '<div>Variations:</div><div>Đen</div><span>' + fmt(57140) + '</span><button>Delete</button></div></section>';
-  // Nạp dần để kiểm tra bước chờ số dòng ổn định.
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shopping Cart</title><style>.a11y-hidden{position:absolute;clip:rect(0 0 0 0);width:1px;height:1px;overflow:hidden}</style></head><body><div id="app"></div><script>' +
-    'const parts=' + JSON.stringify([shopA, shopB, inactive]) + ';' +
-    'const app=document.getElementById("app");' +
-    'setTimeout(()=>{app.insertAdjacentHTML("beforeend",parts[0])},250);' +
-    'setTimeout(()=>{app.insertAdjacentHTML("beforeend",parts[1]);app.insertAdjacentHTML("beforeend",parts[2])},1400);' +
-    '</script></body></html>';
-}
-
-const server = https.createServer({ key: readFileSync('key.pem'), cert: readFileSync('cert.pem') }, (req, res) => {
+const server = https.createServer({ key: readFileSync(key), cert: readFileSync(cert) }, (req, res) => {
   const host = (req.headers.host || '').split(':')[0];
   const url = new URL(req.url, 'https://' + host);
   if (host === 'shopee.vn' && url.pathname === '/cart') {
@@ -57,6 +36,14 @@ const server = https.createServer({ key: readFileSync('key.pem'), cert: readFile
     return res.end('<!doctype html><title>Verify</title><body>captcha</body>');
   }
   if (host === 'shopee.phamkhanhminhman.com' && url.pathname === '/api/sync/cart' && req.method === 'POST') {
+    if (state.unavailable) {
+      res.writeHead(503, { 'content-type': 'text/plain' });
+      return res.end('unavailable');
+    }
+    if (req.headers['x-shopee-tracker'] !== '1') {
+      res.writeHead(403);
+      return res.end();
+    }
     let body = '';
     req.on('data', c => (body += c));
     req.on('end', () => {
@@ -69,21 +56,23 @@ const server = https.createServer({ key: readFileSync('key.pem'), cert: readFile
   }
   res.writeHead(404);
   res.end('not found');
-}).listen(8443);
+}).listen(0, '127.0.0.1');
+await once(server, 'listening');
+const port = server.address().port;
 
 const checks = [];
 const check = (name, ok, detail) => { checks.push({ name, ok: !!ok, detail }); };
 
-const browser = await puppeteer.launch({
-  executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  headless: true,
-  pipe: true,
-  enableExtensions: [EXT],
-  userDataDir: '/private/tmp/ext-e2e/profile-' + Date.now(),
-  args: ['--ignore-certificate-errors', '--no-first-run', '--host-resolver-rules=MAP shopee.vn 127.0.0.1:8443,MAP shopee.phamkhanhminhman.com 127.0.0.1:8443'],
-});
-
+let browser;
 try {
+  browser = await puppeteer.launch({
+    executablePath: chromePath,
+    headless: true,
+    pipe: true,
+    enableExtensions: [EXT],
+    args: ['--ignore-certificate-errors', '--no-first-run', '--no-proxy-server', '--host-resolver-rules=MAP shopee.vn 127.0.0.1:' + port + ',MAP shopee.phamkhanhminhman.com 127.0.0.1:' + port + ',MAP *.susercontent.com ~NOTFOUND'],
+  });
+
   const target = await browser.waitForTarget(t => t.type() === 'service_worker' && t.url().endsWith('/background.js'), { timeout: 15000 });
   const worker = await target.worker();
 
@@ -95,13 +84,25 @@ try {
   check('sync nhận 3 món đang bán (bỏ mục inactive)', items.length === 3, 'got ' + items.length);
   const byId = Object.fromEntries(items.map(i => [i.itemId, i]));
   check('giá Live đọc đúng', byId['1001'] && byId['1001'].unitPrice === 529000 && byId['1001'].streamingPrice === 398000, JSON.stringify(byId['1001']));
-  check('tên shop bỏ nhãn Mall', byId['1001'] && byId['1001'].shopName === 'Baseus Official Mall', byId['1001'] && byId['1001'].shopName);
-  check('tên shop bỏ nhãn Preferred Seller Plus', byId['2001'] && byId['2001'].shopName === 'Elmich Việt Nam', byId['2001'] && byId['2001'].shopName);
+  check('tên shop bỏ nhãn Mall', byId['1001'] && byId['1001'].shopName === 'Gian A', byId['1001'] && byId['1001'].shopName);
+  check('tên shop bỏ nhãn Preferred Seller Plus', byId['2001'] && byId['2001'].shopName === 'Gian B', byId['2001'] && byId['2001'].shopName);
   check('giá gạch ngang không bị nhận làm giá hiện hành', byId['2001'] && byId['2001'].unitPrice === 199000, JSON.stringify(byId['2001']));
   check('phân loại', byId['1002'] && byId['1002'].variation === 'Đen', byId['1002'] && byId['1002'].variation);
   check('voucher shop', byId['1001'] && /60k/.test(byId['1001'].voucherHint), byId['1001'] && byId['1001'].voucherHint);
   check('flash sale và nhãn rẻ hơn từ lúc thêm giỏ', byId['1001'].flashSaleText.includes('Flash Sale') && byId['1002'].cartDropBadge.includes('cheaper'), '');
   check('mục inactive bị bỏ', !byId['3001'], '');
+
+  state.partial = true;
+  const partial = await worker.evaluate(() => scanCart('manual'));
+  check('không gửi khi chỉ đọc được 3/4 món', !partial.ok && partial.error.includes('3/4') && state.posts.length === 1, partial);
+  state.partial = false;
+  state.unavailable = true;
+  const networkError = await worker.evaluate(() => scanCart('alarm'));
+  const retryAlarm = await worker.evaluate(() => chrome.alarms.get('shopee-cart-retry'));
+  check('HTTP 503 có thông báo và đặt lịch thử lại', !networkError.ok && networkError.error.includes('503') && !!retryAlarm, networkError);
+  state.unavailable = false;
+  const retry = await worker.evaluate(() => scanCart('retry'));
+  check('thử lại thành công và xoá lịch cũ', retry.ok && !(await worker.evaluate(() => chrome.alarms.get('shopee-cart-retry'))), retry);
 
   // 2. CAPTCHA: dừng tự động, không gửi gì lên máy chủ
   state.captcha = true;
@@ -131,6 +132,7 @@ try {
   await popup.waitForFunction(() => document.getElementById('status').className === 'ok', { timeout: 5000 });
   const shown = await popup.$eval('#status', e => e.textContent);
   check('popup hiện lượt đồng bộ gần nhất', /Đã đồng bộ 3 món lúc \d\d\/\d\d \d\d:\d\d/.test(shown), shown);
+  check('popup hiển thị mặc định 4 giờ', await popup.$eval('#interval', e => e.value) === '4', '');
   await popup.select('#interval', '6');
   await new Promise(r => setTimeout(r, 600));
   const alarm = await worker.evaluate(() => chrome.alarms.get('shopee-cart-sync'));
@@ -143,10 +145,11 @@ try {
 } catch (err) {
   check('chạy kiểm thử không lỗi', false, String(err && err.stack || err));
 } finally {
-  await browser.close();
+  await browser?.close();
   server.close();
+  rmSync(tmp, { recursive: true, force: true });
   console.log(JSON.stringify(checks, null, 2));
   console.log(checks.every(c => c.ok) ? 'ALL_PASS' : 'HAS_FAIL');
-  process.exit(0);
+  process.exitCode = checks.every(c => c.ok) ? 0 : 1;
 }
 

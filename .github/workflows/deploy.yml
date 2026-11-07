@@ -13,7 +13,7 @@ concurrency:
 jobs:
   deploy:
     name: Verify & Deploy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -32,6 +32,9 @@ jobs:
 
       - name: Run verification (check, test, build)
         run: npm run verify
+
+      - name: Check UI and extension in Chrome
+        run: npm run check:browser
 
       - name: Check Cloudflare credentials
         env:

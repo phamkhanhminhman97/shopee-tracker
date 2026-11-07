@@ -29,12 +29,18 @@ export interface TrackedItem {
   effectivePrice: number;
   firstEffectivePrice: number;
   minEffectivePrice: number;
+  firstUnitPrice: number;
+  minUnitPrice: number;
+  minStreamingPrice: number | null;
   targetPrice: number | null;
   voucherHint: string;
   flashSaleText: string;
   cartDropBadge: string;
   alertMuted: boolean;
   lastAlertedPrice: number | null;
+  lastLowAlertPrice: number | null;
+  lastLiveAlertPrice: number | null;
+  lastLiveAlertAt: string | null;
   firstSeenAt: string;
 }
 
@@ -69,7 +75,7 @@ export interface UpdateItemPayload {
 }
 
 export function buildCartKey(shopId: string, itemId: string, variation: string): string {
-  const norm = variation.trim().toLowerCase().replace(/\s+/g, ' ') || 'default';
+  const norm = variation.normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ') || 'default';
   return shopId.trim() + ':' + itemId.trim() + ':' + norm;
 }
 
@@ -84,10 +90,17 @@ export function formatVnd(amount: number): string {
 }
 
 export function parseVndInteger(raw: string): number | null {
-  const digits = raw.replace(/[^\d]/g, '');
-  if (!digits) return null;
-  const value = Number(digits);
-  return Number.isFinite(value) && value > 0 && value <= 2_000_000_000 ? value : null;
+  const text = raw.trim().replace(/^₫\s*|\s*₫$/g, '');
+  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+|\d{1,3}(?:,\d{3})+)$/.test(text)) return null;
+  const value = Number(text.replace(/[.,]/g, ''));
+  return value > 0 && value <= 2_000_000_000 ? value : null;
+}
+
+export function parseTargetPrice(raw: string): number | null {
+  const abbreviated = /^(\d+(?:[.,]\d{1,3})?)\s*(k|tr|triệu)$/i.exec(raw.trim());
+  if (!abbreviated) return parseVndInteger(raw);
+  const value = Math.round(Number(abbreviated[1].replace(',', '.')) * (abbreviated[2].toLowerCase() === 'k' ? 1000 : 1_000_000));
+  return parseVndInteger(String(value));
 }
 
 const SHOPEE_NOTES: Array<[RegExp, (m: RegExpExecArray) => string]> = [

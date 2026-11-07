@@ -4,6 +4,7 @@ dist/
 .wrangler/
 .output/
 .dev.vars
+backups/
 .DS_Store
 checks/*.png
 extension/content-scrape.js

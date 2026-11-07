@@ -7,6 +7,8 @@ import {
   computeEffectivePrice,
   formatVnd,
   localizeShopeeNote,
+  parseTargetPrice,
+  parseVndInteger,
   type TrackedItem,
 } from '../src/lib/model.ts';
 
@@ -57,12 +59,18 @@ function tracked(overrides: Partial<TrackedItem> = {}): TrackedItem {
     effectivePrice,
     firstEffectivePrice: effectivePrice,
     minEffectivePrice: effectivePrice,
+    firstUnitPrice: unitPrice,
+    minUnitPrice: unitPrice,
+    minStreamingPrice: streamingPrice,
     targetPrice: null,
     voucherHint: '',
     flashSaleText: '',
     cartDropBadge: '',
     alertMuted: false,
     lastAlertedPrice: null,
+    lastLowAlertPrice: null,
+    lastLiveAlertPrice: null,
+    lastLiveAlertAt: null,
     firstSeenAt: '2026-11-07T08:00:00.000Z',
     ...overrides,
   };
@@ -94,6 +102,7 @@ test('giá hiện hành là giá không bị gạch ngang', () => {
 test('hai phân loại của cùng một sản phẩm có khoá khác nhau', () => {
   assert.notEqual(buildCartKey('9', '1', 'Nâu xám 4 lớp'), buildCartKey('9', '1', 'Xanh bơ 4 lớp'));
   assert.equal(buildCartKey('9', '1', 'Nâu  xám 4 lớp'), buildCartKey('9', '1', ' nâu xám 4 lớp '));
+  assert.equal(buildCartKey('9', '1', 'Nâu xám'.normalize('NFD')), buildCartKey('9', '1', 'Nâu xám'));
 });
 
 test('chỉ báo giảm giá thật: bỏ qua Live rẻ hơn 1.000₫, bắt giá Live giảm sâu, giá canh và đáy mới', () => {
@@ -108,14 +117,23 @@ test('chỉ báo giảm giá thật: bỏ qua Live rẻ hơn 1.000₫, bắt gi�
   assert.equal(target.isWorth, true);
   assert.match(target.reason, /giá canh/);
 
-  const low = evaluateDeal(tracked({ unitPrice: 160_000, firstEffectivePrice: 200_000, minEffectivePrice: 160_000 }));
+  const low = evaluateDeal(tracked({ unitPrice: 160_000, firstUnitPrice: 200_000, minUnitPrice: 160_000, minEffectivePrice: 150_000 }));
   assert.equal(low.isWorth, true);
-  assert.match(low.reason, /Đáy mới/);
+  assert.match(low.reason, /Đáy giá giỏ/);
 
   assert.equal(
-    evaluateDeal(tracked({ unitPrice: 195_000, firstEffectivePrice: 200_000, minEffectivePrice: 195_000 })).isWorth,
+    evaluateDeal(tracked({ unitPrice: 195_000, firstUnitPrice: 200_000, minUnitPrice: 195_000 })).isWorth,
     false
   );
+});
+
+test('đọc giá tiền nguyên, hiểu giá canh viết tắt và bỏ dòng giá giỏ mơ hồ', () => {
+  assert.equal(parseTargetPrice('350k'), 350_000);
+  assert.equal(parseTargetPrice('1.5tr'), 1_500_000);
+  assert.equal(parseTargetPrice('3,5 triệu'), 3_500_000);
+  assert.equal(parseVndInteger('₫1.299,50'), null);
+  assert.equal(parseVndInteger('₫1.299.000'), 1_299_000);
+  assert.equal(parseCartRowLines(row({ lines: ['259.000₫', '199.000₫'] })), null);
 });
 
 test('dịch ghi chú tiếng Anh của Shopee và định dạng tiền', () => {

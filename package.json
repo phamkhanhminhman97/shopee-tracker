@@ -11,9 +11,12 @@
     "ext:build": "node --experimental-strip-types scripts/build-extension.ts",
     "build": "astro build",
     "preview": "wrangler dev --ip 127.0.0.1 --port 8788",
-    "check": "astro check && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.extension.json --noEmit",
+    "check": "astro check && tsc -p tsconfig.worker.json && tsc -p tsconfig.extension.json && tsc -p tsconfig.tools.json",
+    "check:browser": "node checks/ui-check.mjs && node checks/ext-e2e.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "db:local": "wrangler d1 migrations apply shopee-tracker --local",
+    "db:backup": "node scripts/backup-d1.ts",
+    "db:backup:schedule": "node scripts/schedule-backup.ts",
     "cf:setup": "node --experimental-strip-types scripts/setup-cloudflare.ts",
     "verify": "npm run ext:build && npm run check && npm test && npm run build",
     "deploy:check": "wrangler deploy --dry-run --outdir .output",
@@ -27,6 +30,7 @@
     "@types/node": "22.19.0",
     "esbuild": "0.28.2",
     "miniflare": "5.20261103.0-beta",
+    "puppeteer-core": "25.16.0",
     "typescript": "6.0.3",
     "wrangler": "4.157.0"
   }

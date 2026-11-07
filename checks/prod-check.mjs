@@ -1,9 +1,10 @@
 import puppeteer from 'puppeteer-core';
+import { chromePath } from './chrome.mjs';
 const URL_BASE = 'https://shopee.phamkhanhminhman.com/';
 const checks = [];
 const check = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: ok ? undefined : detail });
 
-const browser = await puppeteer.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--no-first-run'] });
+const browser = await puppeteer.launch({ executablePath: chromePath, headless: true, args: ['--no-first-run'] });
 const page = await browser.newPage();
 const errors = [];
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
@@ -24,7 +25,6 @@ for (const [w, h, theme] of [[1440, 900, 'dark'], [1024, 800, 'dark'], [768, 900
   check(w + 'px ' + theme + ': danh sách có sản phẩm, không tràn, vùng chạm đủ, ảnh tải được', m.rows > 0 && !m.overflow && m.small === 0 && m.imgsOk, m);
   if (w === 1440) {
     console.log('meta:', m.meta, '| giỏ hàng', m.cart, '| đáng chốt', m.worth);
-    await page.screenshot({ path: '/Users/man/Documents/minhman-workspace/websites/shopee-tracker/checks/live-preview.png' });
   }
 }
 
@@ -40,7 +40,7 @@ check('hộp chi tiết mở và có biểu đồ', true, '');
 await page.keyboard.press('Escape');
 await page.click('[data-view="connect"]');
 const connect = await page.$eval('#connect', el => ({ telegram: !el.querySelector('#telegram-test').disabled, rows: el.querySelectorAll('tbody tr').length, steps: !!el.querySelector('.steps'), firstSource: el.querySelector('tbody td:nth-child(2)')?.textContent }));
-check('tab Kết nối: Telegram bật, 1 lượt quét "Lần đầu"', connect.telegram && connect.rows >= 1 && connect.rows >= 1, connect);
+check('tab Kết nối: Telegram bật và có nhật ký quét', connect.telegram && connect.rows >= 1, connect);
 const zip = (await fetch(URL_BASE + 'extension/shopee-cart-sync.zip')).status;
 const font = await fetch(URL_BASE + 'fonts/Geist-400-latin.woff2');
 check('phông Geist được phục vụ (200, font/woff2)', font.status === 200 && /woff2/.test(font.headers.get('content-type') || ''), [font.status, font.headers.get('content-type')]);
@@ -57,4 +57,5 @@ check('0 lỗi console, 0 request hỏng', errors.length === 0, errors.slice(0, 
 await browser.close();
 for (const c of checks) console.log((c.ok ? 'PASS ' : 'FAIL ') + c.name + (c.ok ? '' : ' :: ' + JSON.stringify(c.detail)));
 console.log(checks.every(c => c.ok) ? 'ALL_PASS' : 'HAS_FAIL');
+process.exitCode = checks.every(c => c.ok) ? 0 : 1;
 

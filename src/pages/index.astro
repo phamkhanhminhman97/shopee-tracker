@@ -13,7 +13,9 @@ import { ICONS } from '../lib/icons.ts';
     <meta name="theme-color" content="#EBEBEB" media="(prefers-color-scheme: light)" />
     <title>Sổ Canh Giá Shopee</title>
     <meta name="description" content="Theo dõi giá các phân loại hàng trong giỏ Shopee và báo qua Telegram khi giá chạm đáy." />
+    <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/Geist-400-latin.woff2" />
     <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/Geist-500-latin.woff2" />
@@ -26,9 +28,9 @@ import { ICONS } from '../lib/icons.ts';
         <div class="bar-row">
           <h1 class="brand">Sổ Canh Giá Shopee</h1>
           <nav class="seg" aria-label="Chế độ xem">
-            <button type="button" data-view="cart" aria-current="page">Giỏ hàng <span class="n" id="count-cart">0</span></button>
-            <button type="button" data-view="worth">Đáng chốt <span class="n is-deal" id="count-worth">0</span></button>
-            <button type="button" data-view="connect">Kết nối</button>
+            <button type="button" data-view="cart" aria-pressed="true">Giỏ hàng <span class="n" id="count-cart"></span></button>
+            <button type="button" data-view="worth" aria-pressed="false">Đáng chốt <span class="n is-deal" id="count-worth"></span></button>
+            <button type="button" data-view="connect" aria-pressed="false">Kết nối</button>
           </nav>
           <div id="tools" class="tools">
             <div class="search">
@@ -71,6 +73,7 @@ import { ICONS } from '../lib/icons.ts';
 
         <div class="chart-box">
           <p id="chart-legend" class="muted small"></p>
+          <p id="chart-range" class="small"></p>
           <div id="chart"></div>
         </div>
 
@@ -82,8 +85,10 @@ import { ICONS } from '../lib/icons.ts';
             inputmode="numeric"
             autocomplete="off"
             class="input"
-            placeholder="Để trống: chỉ báo khi lập đáy mới hoặc Live giảm sâu"
+            placeholder="350000"
+            aria-describedby="target-help"
           />
+          <p id="target-help" class="small muted">Để trống nếu chỉ muốn nhận báo đáy giá giỏ hoặc ưu đãi Live.</p>
           <div id="presets" class="presets"></div>
           <label class="check"><input id="mute" type="checkbox" /> Tắt báo Telegram cho món này</label>
           <p id="dialog-feedback" class="feedback" role="status" aria-live="polite"></p>

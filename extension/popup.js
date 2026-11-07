@@ -14,7 +14,7 @@ function render(status) {
 }
 
 chrome.storage.local.get(['intervalHours', 'lastStatus'], data => {
-  if (data.intervalHours) intervalEl.value = String(data.intervalHours);
+  intervalEl.value = String(data.intervalHours ?? 4);
   render(data.lastStatus);
 });
 
