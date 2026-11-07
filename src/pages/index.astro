@@ -25,18 +25,26 @@ import { ICONS } from '../lib/icons.ts';
 
     <header class="bar">
       <div class="bar-in">
-        <div class="bar-row">
+        <div class="identity">
           <h1 class="brand">Sổ Canh Giá Shopee</h1>
-          <nav class="seg" aria-label="Chế độ xem">
-            <button type="button" data-view="cart" aria-pressed="true">Giỏ hàng <span class="n" id="count-cart"></span></button>
-            <button type="button" data-view="worth" aria-pressed="false">Đáng chốt <span class="n is-deal" id="count-worth"></span></button>
-            <button type="button" data-view="connect" aria-pressed="false">Kết nối</button>
-          </nav>
+          <p id="sync-meta" class="summary" role="status">Đang tải...</p>
+        </div>
+        <nav class="views" aria-label="Chế độ xem">
+          <button type="button" data-view="cart" aria-pressed="true">Giỏ hàng <span class="n" id="count-cart"></span></button>
+          <button type="button" data-view="worth" aria-pressed="false">Đáng chốt <span class="n is-deal" id="count-worth"></span></button>
+          <button type="button" data-view="connect" aria-pressed="false">Kết nối</button>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="content" tabindex="-1">
+      <div id="ledger">
+        <div id="ledger-toolbar" class="ledger-toolbar">
           <div id="tools" class="tools">
             <div class="search">
               <label for="search" class="vh">Tìm món hoặc shop</label>
               <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['magnifying-glass']} />
-              <input id="search" type="search" class="input" placeholder="Tìm món, shop" autocomplete="off" />
+              <input id="search" type="search" class="input" placeholder="Tìm món hoặc shop" autocomplete="off" />
               <kbd aria-hidden="true">/</kbd>
             </div>
             <div class="sel">
@@ -50,16 +58,10 @@ import { ICONS } from '../lib/icons.ts';
               <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['caret-down']} />
             </div>
           </div>
-        </div>
-        <div class="bar-sub"><p id="sync-meta" class="summary" role="status">Đang tải...</p></div>
-      </div>
-    </header>
-
-    <main id="main" class="content">
-      <div id="ledger">
-        <div id="order-toolbar" class="order-toolbar" hidden>
-          <p id="order-help" class="small muted" hidden><span class="drag-copy">Kéo món hoặc dùng mũi tên lên/xuống.</span><span class="touch-copy">Dùng mũi tên lên/xuống để đổi vị trí.</span> Thứ tự lưu trên trình duyệt này.</p>
-          <button id="edit-order" type="button" class="btn" aria-pressed="false">Đổi vị trí</button>
+          <div id="order-toolbar" class="order-toolbar" hidden>
+            <p id="order-help" class="small muted" hidden><span class="drag-copy">Kéo món hoặc dùng mũi tên lên/xuống.</span><span class="touch-copy">Dùng mũi tên lên/xuống.</span> Thứ tự lưu trên trình duyệt này.</p>
+            <button id="edit-order" type="button" class="btn" aria-controls="list">Đổi vị trí</button>
+          </div>
         </div>
         <p id="order-status" class="vh" role="status"></p>
         <div id="list"></div>
@@ -84,6 +86,7 @@ import { ICONS } from '../lib/icons.ts';
           <p id="chart-range" class="small"></p>
           <div id="chart"></div>
         </div>
+        <ul id="product-notes" class="product-notes muted small" hidden></ul>
 
         <form id="target-form">
           <label for="target" class="label">Báo Telegram khi giá về mức (VNĐ)</label>

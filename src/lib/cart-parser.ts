@@ -52,7 +52,7 @@ export function parseCartRowLines(raw: RawCartRow): CartSnapshotItem | null {
       continue;
     }
 
-    const live = /(?:streaming price(?: at)?|giá live)[:\s]*([\d.,]+)/i.exec(line);
+    const live = /^(?:streaming price(?: at)?|giá live)\s*[:：]?\s*(.*)$/i.exec(line);
     if (live) {
       streamingPrice = parseVndInteger(live[1]);
       continue;
@@ -65,7 +65,7 @@ export function parseCartRowLines(raw: RawCartRow): CartSnapshotItem | null {
       cartDropBadge = line;
       continue;
     }
-    if (/^(?:₫\s*)?[\d.]+(?:,\d+)?\s*₫?$/.test(line) && line.includes('₫')) {
+    if (line.includes('₫')) {
       const price = parseVndInteger(line);
       if (price !== null) prices.push(price);
     }

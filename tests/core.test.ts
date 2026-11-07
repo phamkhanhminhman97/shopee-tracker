@@ -99,6 +99,12 @@ test('giá hiện hành là giá không bị gạch ngang', () => {
   assert.equal(parseCartRowLines(row({ lines }))?.unitPrice, 199_000);
 });
 
+test('đọc giá giỏ phân cách bằng dấu phẩy và ký hiệu ₫ đứng trước giá Live', () => {
+  assert.equal(parseCartRowLines(row({ lines: ['₫1,299,000'] }))?.unitPrice, 1_299_000);
+  assert.equal(parseCartRowLines(row({ lines: ['529.000₫', 'Streaming Price at ₫398.000'] }))?.streamingPrice, 398_000);
+  assert.equal(parseCartRowLines(row({ lines: ['1.299.000₫', 'Streaming Price at 1 200 000₫'] }))?.streamingPrice, null);
+});
+
 test('hai phân loại của cùng một sản phẩm có khoá khác nhau', () => {
   assert.notEqual(buildCartKey('9', '1', 'Nâu xám 4 lớp'), buildCartKey('9', '1', 'Xanh bơ 4 lớp'));
   assert.equal(buildCartKey('9', '1', 'Nâu  xám 4 lớp'), buildCartKey('9', '1', ' nâu xám 4 lớp '));

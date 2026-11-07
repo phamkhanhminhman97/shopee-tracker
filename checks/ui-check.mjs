@@ -15,7 +15,7 @@ const fixture = {
   title: 'Tai nghe đang giảm giá Live', variation: 'Trắng', productUrl: 'https://shopee.vn/product/1/2',
   imageUrl: '/broken-image.png', cartOrder: 0, unitPrice: 529_000, streamingPrice: 398_000, effectivePrice: 398_000,
   firstEffectivePrice: 499_000, minEffectivePrice: 398_000, firstUnitPrice: 529_000, minUnitPrice: 529_000,
-  targetPrice: null, voucherHint: '', flashSaleText: '', cartDropBadge: '', alertMuted: false, firstSeenAt: syncedAt,
+  targetPrice: null, voucherHint: 'Up to 60k₫ off voucher available', flashSaleText: '', cartDropBadge: '', alertMuted: false, firstSeenAt: syncedAt,
 };
 const state = {
   items: [fixture, ...Array.from({ length: 17 }, (_, i) => ({
@@ -26,6 +26,8 @@ const state = {
 };
 const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 let sentHeader;
+let pausePatch;
+let noHistory = false;
 const server = http.createServer(async (req, res) => {
   if (req.url === '/broken-image.png') return res.writeHead(200, { 'content-type': 'image/png' }).end('not an image');
   if (req.url.startsWith('/api/')) {
@@ -34,10 +36,11 @@ const server = http.createServer(async (req, res) => {
       sentHeader = req.headers['x-shopee-tracker'];
       let body = '';
       for await (const chunk of req) body += chunk;
+      await pausePatch?.();
       fixture.targetPrice = JSON.parse(body).targetPrice;
       return res.end('{"ok":true}');
     }
-    return res.end(JSON.stringify(req.url === '/api/state' ? state : { points: [
+    return res.end(JSON.stringify(req.url === '/api/state' ? state : { points: noHistory ? [] : [
       { recordedAt: '2026-11-06T00:00:00.000Z', unitPrice: 529_000, effectivePrice: 499_000 },
       { recordedAt: '2026-11-06T01:00:00.000Z', unitPrice: 529_000, effectivePrice: 440_000 },
       { recordedAt: '2026-11-07T00:00:00.000Z', unitPrice: 529_000, effectivePrice: 398_000 },
@@ -88,6 +91,23 @@ try {
     await page.waitForSelector('.row');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Tràn ngang ở ' + width);
     if (width === 844) assert.equal(await page.$eval('.bar', el => getComputedStyle(el).position), 'static');
+    const layout = await page.evaluate(() => {
+      const [first, second] = document.querySelectorAll('.row');
+      const box = (row, selector) => row.querySelector(selector).getBoundingClientRect();
+      const prices = [first, second].map(row => box(row, '.price-box'));
+      const button = box(first, '.row-open');
+      const controls = [...document.querySelectorAll('#ledger-toolbar button, #ledger-toolbar input, #ledger-toolbar select, .row:first-child button, .row:first-child a')];
+      const touchTargets = controls.every(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.width >= 44 && rect.height >= 44;
+      });
+      return {
+        samePriceColumn: Math.abs(prices[0].right - prices[1].right) < 1,
+        priceBesideAction: prices[0].bottom >= button.top && prices[0].top <= button.bottom && prices[0].right <= button.left,
+        touchTargets,
+      };
+    });
+    assert.ok(layout.samePriceColumn && layout.priceBesideAction && layout.touchTargets, 'Giá và thao tác lệch ở ' + width);
   }
   assert.equal(await pngSize(await page.$eval('link[rel="apple-touch-icon"]', el => el.href)), '180x180');
   await page.waitForSelector('.row:first-child span.thumb');
@@ -110,6 +130,7 @@ try {
   await page.setViewport({ width: 320, height: 700 });
   await page.click('[data-open]');
   await page.waitForFunction(() => document.querySelector('#chart svg')?.getAttribute('aria-label').includes('499.000'));
+  assert.match(await page.$eval('#product-notes', el => el.textContent), /Voucher shop giảm đến 60k₫/);
   const chart = await page.$eval('#chart svg', el => ({ width: el.clientWidth, view: el.viewBox.baseVal.width }));
   assert.equal(chart.width, chart.view, 'Biểu đồ không được thu chữ theo viewBox desktop');
   assert.match(await page.$eval('#chart-range', el => el.textContent), /398\.000.+499\.000/);
@@ -131,6 +152,39 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.activeElement.hasAttribute('data-open'));
 
+  const patchStarted = Promise.withResolvers();
+  const patchDone = Promise.withResolvers();
+  pausePatch = () => { patchStarted.resolve(); return patchDone.promise; };
+  try {
+    await page.click('.row:first-child [data-open]');
+    await page.$eval('#target', el => { el.value = '345k'; });
+    await page.click('#save');
+    await patchStarted.promise;
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#dialog', { hidden: true });
+    await page.click('.row:nth-child(2) [data-open]');
+    assert.equal(await page.$eval('#save', el => el.disabled), false, 'Lượt lưu chậm của món trước không khóa món đang mở');
+    const oldRow = await page.$('.row:first-child');
+    patchDone.resolve();
+    await page.waitForFunction(row => !row.isConnected, {}, oldRow);
+    assert.equal(await page.$eval('#dialog-feedback', el => el.textContent), '', 'Không hiển thị phản hồi lưu của món trước');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#dialog', { hidden: true });
+    await page.focus('.row:first-child [data-open]');
+  } finally {
+    patchDone.resolve();
+    pausePatch = undefined;
+  }
+
+  noHistory = true;
+  await page.click('.row:first-child [data-open]');
+  await page.waitForFunction(() => document.querySelector('#chart-range')?.textContent === 'Chưa có lịch sử giá.');
+  assert.equal(await page.$('#chart svg'), null);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#dialog', { hidden: true });
+  await page.focus('.row:first-child [data-open]');
+  noHistory = false;
+
   fixture.title = 'Tên món sau lần cập nhật';
   await page.evaluate(() => window.runRefresh());
   await page.waitForFunction(() => document.querySelector('.row h2')?.textContent === 'Tên món sau lần cập nhật');
@@ -138,7 +192,7 @@ try {
 
   await page.click('[data-view="connect"]');
   assert.equal(await page.$eval('[data-view="connect"]', el => el.getAttribute('aria-pressed')), 'true');
-  assert.equal(await page.$eval('.table-scroll', el => el.tabIndex), 0);
+  assert.ok(await page.$eval('.table-wrap', el => el.scrollWidth <= el.clientWidth), 'Nhật ký 320 px phải đọc được không cuộn ngang');
 
   await page.setViewport({ width: 320, height: 700, isMobile: true, hasTouch: true });
   await page.goto(address);

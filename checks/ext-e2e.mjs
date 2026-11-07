@@ -16,7 +16,8 @@ execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-subj
 const fixture = readFileSync(new URL('../tests/fixtures/cart.html', import.meta.url), 'utf8');
 const state = { captcha: false, partial: false, unavailable: false, posts: [], cartHits: 0 };
 const cartPage = () => state.partial
-  ? fixture.replace('<!--partial-->', '<div><h4>cart_accessibility_item</h4><p>Không có giá hoặc liên kết</p></div>')
+  ? fixture.replace('<!--partial-->', '<div><h4>cart_accessibility_item</h4><a href="/vi-i.222.2002">Ví mẫu</a><div>19.000₫</div></div>' +
+      '<div><h4>cart_accessibility_item</h4><p>Không có giá hoặc liên kết</p></div>')
   : fixture;
 
 const server = https.createServer({ key: readFileSync(key), cert: readFileSync(cert) }, (req, res) => {
@@ -94,7 +95,7 @@ try {
 
   state.partial = true;
   const partial = await worker.evaluate(() => scanCart('manual'));
-  check('không gửi khi chỉ đọc được 3/4 món', !partial.ok && partial.error.includes('3/4') && state.posts.length === 1, partial);
+  check('không gửi khi chỉ đọc được 4/5 món', !partial.ok && partial.error.includes('4/5') && state.posts.length === 1, partial);
   state.partial = false;
   state.unavailable = true;
   const networkError = await worker.evaluate(() => scanCart('alarm'));
@@ -133,6 +134,15 @@ try {
   const shown = await popup.$eval('#status', e => e.textContent);
   check('popup hiện lượt đồng bộ gần nhất', /Đã đồng bộ 3 món lúc \d\d\/\d\d \d\d:\d\d/.test(shown), shown);
   check('popup hiển thị mặc định 4 giờ', await popup.$eval('#interval', e => e.value) === '4', '');
+  await worker.evaluate(() => { running = true; });
+  try {
+    await popup.click('#scan');
+    await popup.waitForFunction(() => !document.getElementById('scan').disabled);
+    const busy = await popup.$eval('#status', el => el.textContent);
+    check('popup báo đang bận thay vì hiện kết quả lần trước', busy.includes('lượt quét chạy dở'), busy);
+  } finally {
+    await worker.evaluate(() => { running = false; });
+  }
   await popup.select('#interval', '6');
   await new Promise(r => setTimeout(r, 600));
   const alarm = await worker.evaluate(() => chrome.alarms.get('shopee-cart-sync'));

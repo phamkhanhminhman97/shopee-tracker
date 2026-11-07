@@ -7,7 +7,7 @@ Thiết kế: [DESIGN.md](DESIGN.md). Tiến độ rà soát: [KE-HOACH.md](KE-H
 ## Cách hoạt động
 
 1. **Tiện ích Chrome (`extension/`):** mỗi 3, 4 hoặc 6 giờ (mặc định 4) mở tab giỏ hàng riêng ở nền rồi đọc danh sách. Nếu lỗi mạng, thử lại sau 10 phút, tối đa 3 lần. Gặp CAPTCHA, tiện ích dừng quét tự động và hiện dấu "!"; xác minh xong thì bấm **Quét giỏ hàng ngay**.
-2. **Worker + D1 (`src/worker/`):** giữ lịch sử riêng theo phân loại. Nếu giỏ đã lưu có từ 5 món mà bản mới thiếu hơn nửa, hoặc giỏ từ có hàng chuyển sang rỗng, Worker chờ bản chụp cùng danh sách lần nữa trong một giờ. Worker kiểm tra mỗi giờ và gửi Telegram khi quá 9 giờ chưa nhận lượt quét thành công, rồi báo một lần khi đồng bộ lại.
+2. **Worker + D1 (`src/worker/`):** giữ lịch sử riêng theo phân loại. Tiện ích thử lại nếu có dòng không đọc được. Khi một món vắng mặt, Worker chờ bản chụp xác nhận cùng danh sách trong một giờ. Giá mới, lịch sử và hàng chờ Telegram được ghi cùng giao dịch. Worker kiểm tra mỗi giờ và gửi Telegram khi quá 9 giờ chưa nhận lượt quét thành công, rồi báo một lần khi đồng bộ lại.
 3. **Web (`src/pages`, `src/client`):** danh sách giá, tab Đáng chốt, đặt giá canh và biểu đồ lịch sử cho từng món, tab Kết nối (Telegram và nhật ký quét).
 
 Ở **Giỏ hàng**, bấm **Đổi vị trí**, kéo món hoặc dùng mũi tên lên/xuống rồi bấm **Xong**. Chọn **Tự sắp xếp** để xem lại thứ tự đã lưu trên trình duyệt. Thứ tự này chỉ áp dụng trong sổ canh giá.
@@ -18,7 +18,7 @@ Thiết kế: [DESIGN.md](DESIGN.md). Tiến độ rà soát: [KE-HOACH.md](KE-H
 - Đáy giá giỏ thường rẻ hơn lúc bắt đầu canh ít nhất 10.000₫ và 5%. Giá Live có mốc riêng.
 - Giá Shopee Live rẻ hơn giá giỏ thường ít nhất 20.000₫ và 7%. Live rẻ hơn 1.000₫ không tính.
 
-Giá canh có thể báo lại khi giá đã tăng từ 5% rồi giảm xuống. Đáy giá giỏ chỉ báo lại khi rẻ hơn đáy đã báo. Báo giá Live của mỗi món cách nhau ít nhất 12 giờ.
+Giá canh báo lại khi giá giảm thêm dưới mức đã báo, hoặc sau khi giá đã vượt ngưỡng canh, tăng ít nhất 5% so với mức đã báo rồi giảm lại. Đáy giá giỏ chỉ báo lại khi rẻ hơn đáy đã báo. Báo giá Live của mỗi món cách nhau ít nhất 12 giờ.
 
 Mỗi món có thể có nhiều lý do đủ điều kiện trong cùng một tin. Danh sách dài được chia thành nhiều tin; chỉ món đã gửi thành công được đánh dấu đã báo. Tin lỗi được thử lại theo lịch 5 phút trong 30 phút kể từ lần ghi nhận; Worker bỏ giá đã đổi, món rời giỏ hoặc đã tắt báo.
 
@@ -54,4 +54,4 @@ npm run preview      # http://127.0.0.1:8788 (Telegram tắt vì không có secr
 1. Từ thư mục dự án, chạy `npm run db:backup` để xuất bản sao D1 vào `backups/`. Chỉ chạy bước tiếp theo nếu xuất thành công.
 2. Áp migration trước khi đưa mã mới lên `main`: `npx wrangler d1 migrations apply shopee-tracker --remote`. Luồng gửi lại Telegram cần `0005_alert_outbox.sql`.
 3. Khi đẩy mã lên `main`, GitHub Actions chạy kiểm tra và deploy Worker. Kiểm tra lần chạy thành công.
-4. Nếu Chrome đang dùng tiện ích trước 0.3.0, chạy `npm run ext:build` trên máy dùng Shopee, Reload tiện ích rồi quét một lượt.
+4. Nếu mã tiện ích thay đổi, chạy `npm run ext:build` trên máy dùng Shopee, Reload tiện ích trong `chrome://extensions` rồi quét một lượt. Phiên bản hiện tại là 0.3.1.

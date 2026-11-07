@@ -17,7 +17,6 @@
     "db:local": "wrangler d1 migrations apply shopee-tracker --local",
     "db:backup": "node scripts/backup-d1.ts",
     "db:backup:schedule": "node scripts/schedule-backup.ts",
-    "cf:setup": "node --experimental-strip-types scripts/setup-cloudflare.ts",
     "verify": "npm run ext:build && npm run check && npm test && npm run build",
     "deploy:check": "wrangler deploy --dry-run --outdir .output",
     "deploy": "npm run verify && wrangler deploy"

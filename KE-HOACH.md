@@ -8,7 +8,7 @@ Mục tiêu: Canh giá chính xác, phát hiện giảm sâu / chạm giá canh,
 - **#1 đến #8:** đã sửa trên máy. Kiểm tra đồng bộ mỗi giờ, báo sau 9 giờ và khi hồi phục. Bản chụp thiếu nhiều món cần xác nhận lại; dữ liệu giỏ rỗng chỉ được nhận nếu Shopee có dấu hiệu rõ ràng. Giá Live và giá giỏ có mốc riêng; giá canh vẫn xét giá mua tốt nhất. Migration mới là `0003_tracker_state.sql` và `0004_price_baselines.sql`.
 - **#9:** repo, submodule và CI/CD đã hoạt động từ lần triển khai trước. Các bảng bên dưới ghi nhận phát hiện ban đầu.
 - **#10 đến #20:** đã sửa và kiểm cục bộ; xem bảng P2 bên dưới.
-- **Còn trước khi đưa lên:** sao lưu D1, áp hai migration, deploy qua GitHub Actions, Reload tiện ích 0.3.0 và kiểm một lượt quét thật. Xem [README.md](README.md#đưa-bản-030-lên-production).
+- **Production:** Worker `618c81b5` đã chạy với migration đến `0005`. Bản rà tiếp theo tăng bảo vệ bản chụp: mọi món vắng mặt đều cần quét xác nhận, không chỉ khi giỏ giảm hơn nửa. Bản này chưa deploy, không thêm migration; cần Reload tiện ích 0.3.1 khi đưa lên. Xem [README.md](README.md#đưa-thay-đổi-lên-production).
 
 ---
 

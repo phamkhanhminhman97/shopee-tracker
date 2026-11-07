@@ -4,7 +4,7 @@ const intervalEl = document.getElementById('interval');
 
 function render(status) {
   if (!status) return;
-  const d = new Date(status.at);
+  const d = new Date(status.at ?? Date.now());
   const pad = n => String(n).padStart(2, '0');
   const when = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   statusEl.className = status.ok ? 'ok' : 'err';
@@ -14,20 +14,28 @@ function render(status) {
 }
 
 chrome.storage.local.get(['intervalHours', 'lastStatus'], data => {
-  intervalEl.value = String(data.intervalHours ?? 4);
-  render(data.lastStatus);
+  intervalEl.value = String([3, 4, 6].includes(data.intervalHours) ? data.intervalHours : 4);
+  if (!scanBtn.disabled) render(data.lastStatus);
 });
 
-scanBtn.addEventListener('click', () => {
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.lastStatus) render(changes.lastStatus.newValue);
+});
+
+scanBtn.addEventListener('click', async () => {
   scanBtn.disabled = true;
   scanBtn.textContent = 'Đang quét...';
   statusEl.className = '';
   statusEl.textContent = 'Đang tải giỏ hàng, chờ vài giây...';
-  chrome.runtime.sendMessage({ type: 'SYNC_NOW' }, () => {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+    render(result ?? { ok: false, error: 'Không nhận được kết quả từ tiện ích.' });
+  } catch {
+    render({ ok: false, error: 'Không liên lạc được với tiện ích. Hãy mở lại và thử lại.' });
+  } finally {
     scanBtn.disabled = false;
     scanBtn.textContent = 'Quét giỏ hàng ngay';
-    chrome.storage.local.get('lastStatus', data => render(data.lastStatus));
-  });
+  }
 });
 
 intervalEl.addEventListener('change', () => {

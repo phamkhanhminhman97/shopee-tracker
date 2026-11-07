@@ -108,6 +108,10 @@ test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, 
         method: 'POST', headers: writeHeaders, body: JSON.stringify({ items: [snapshotItem({ unitPrice: 159_000 })] }),
       });
       assert.equal(overlap.status, 409);
+      const change = await call('/api/items/' + encodeURIComponent('254666730:28016604566:xanh min'), {
+        method: 'PATCH', headers: writeHeaders, body: JSON.stringify({ alertMuted: true }),
+      });
+      assert.equal(change.status, 409);
     } finally {
       release();
     }
@@ -120,6 +124,7 @@ test('đồng bộ giỏ hàng: báo Telegram một lần khi giá giảm sâu, 
     assert.equal(messages.length, 1);
 
     const other = snapshotItem({ shopId: '1', itemId: '2', variation: '', title: 'Món khác', unitPrice: 100_000 });
+    assert.equal((await sync([other])).ok, false);
     await sync([other]);
     const state = (await (await call('/api/state')).json()) as { items: Array<{ title: string }>; lastSyncedAt: string };
     assert.deepEqual(state.items.map(i => i.title), ['Món khác']);
@@ -343,6 +348,64 @@ test('Telegram chia đủ 11 món, chỉ đánh dấu món đã gửi và thử 
     assert.equal(messages.length, sends);
     assert.equal(await db.prepare('SELECT count(*) AS n FROM alert_outbox').first<number>('n'), 0);
     assert.equal(await marked(), 11);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('giá canh không báo lại khi giá bật lên mà vẫn dưới ngưỡng', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
+    const original = await upsertCartSnapshot(db, [snapshotItem({ unitPrice: 300_000 })]);
+    assert.ok(original);
+    const key = '254666730:28016604566:xanh min';
+    await db.prepare('UPDATE cart_items SET target_price = 300000 WHERE cart_key = ?').bind(key).run();
+    const first = await upsertCartSnapshot(db, [snapshotItem({ unitPrice: 200_000 })]);
+    assert.ok(first);
+    await markAlertsDelivered(db, first.alerts, first.syncedAt);
+    const rebound = await upsertCartSnapshot(db, [snapshotItem({ unitPrice: 230_000 })]);
+    assert.ok(rebound);
+    assert.equal(rebound.alerts.some(alert => alert.deals.some(deal => deal.kind === 'target')), false);
+    await upsertCartSnapshot(db, [snapshotItem({ unitPrice: 320_000 })]);
+    const back = await upsertCartSnapshot(db, [snapshotItem({ unitPrice: 295_000 })]);
+    assert.ok(back);
+    assert.equal(back.alerts.some(alert => alert.deals.some(deal => deal.kind === 'target')), true);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('bản chụp thiếu một món chưa làm mất món đó cho đến lần xác nhận', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
+    const cart = Array.from({ length: 5 }, (_, i) => snapshotItem({ shopId: '1', itemId: String(i + 1) }));
+    const visible = () => db.prepare('SELECT count(*) AS n FROM cart_items WHERE in_cart = 1').first<number>('n');
+    assert.ok(await upsertCartSnapshot(db, cart));
+    assert.equal(await upsertCartSnapshot(db, cart.slice(0, 4)), null);
+    assert.equal(await visible(), 5);
+    assert.ok(await upsertCartSnapshot(db, cart));
+    assert.equal(await upsertCartSnapshot(db, cart.slice(0, 4)), null, 'Lượt đủ món phải hủy xác nhận cũ');
+    assert.ok(await upsertCartSnapshot(db, cart.slice(0, 4)));
+    assert.equal(await visible(), 4);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('lỗi giữa bản chụp không ghi giá nửa chừng vào giỏ và lịch sử', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
+    const cart = Array.from({ length: 45 }, (_, i) => snapshotItem({ shopId: '1', itemId: String(i + 1), unitPrice: 200_000 }));
+    await upsertCartSnapshot(db, cart);
+    await db.prepare(`CREATE TRIGGER reject_last BEFORE UPDATE ON cart_items
+      WHEN NEW.item_id = '45' BEGIN SELECT RAISE(ABORT, 'fixture failed'); END`).run();
+    await assert.rejects(upsertCartSnapshot(db, cart.map(item => ({ ...item, unitPrice: 150_000 })), new Date().toISOString(), true), /fixture failed/);
+    assert.equal(await db.prepare('SELECT count(*) AS n FROM cart_items WHERE unit_price = 150000').first<number>('n'), 0);
+    assert.equal(await db.prepare('SELECT count(*) AS n FROM price_history').first<number>('n'), 45);
+    assert.equal(await db.prepare('SELECT count(*) AS n FROM alert_outbox').first<number>('n'), 0);
   } finally {
     await mf.dispose();
   }

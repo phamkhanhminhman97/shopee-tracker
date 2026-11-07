@@ -8,7 +8,6 @@ import {
   getItemHistory,
   claimUntil,
   claimCartSync,
-  enqueueAlerts,
   releaseClaim,
   recordSyncRun,
   updateItemSettings,
@@ -69,8 +68,15 @@ export async function handleApiRequest(
       if (alertMuted !== undefined && typeof alertMuted !== 'boolean') {
         return json({ ok: false, error: 'Giá trị tắt báo không hợp lệ' }, 400);
       }
-      const found = await updateItemSettings(env.DB, cartKey(item[1]), { targetPrice, alertMuted });
-      return found ? json({ ok: true }) : json({ ok: false, error: 'Không tìm thấy sản phẩm' }, 404);
+      const key = cartKey(item[1]);
+      const claim = await claimCartSync(env.DB);
+      if (!claim) throw new InputError('Đang đồng bộ giỏ hàng. Hãy thử lưu lại sau vài giây.', 409);
+      try {
+        const found = await updateItemSettings(env.DB, key, { targetPrice, alertMuted });
+        return found ? json({ ok: true }) : json({ ok: false, error: 'Không tìm thấy sản phẩm' }, 404);
+      } finally {
+        await releaseClaim(env.DB, 'sync_lock', claim);
+      }
     }
 
     if (path === '/api/sync/cart' && method === 'POST') {
@@ -82,15 +88,14 @@ export async function handleApiRequest(
       if (!claim) throw new InputError('Đang xử lý lượt đồng bộ khác.', 409);
 
       try {
-        const sync = await upsertCartSnapshot(env.DB, items);
-        if (!sync) throw new InputError('Giỏ thay đổi nhiều. Hãy quét lại để xác nhận danh sách mới.', 409);
+        const sync = await upsertCartSnapshot(env.DB, items, new Date().toISOString(), telegramConfigured);
+        if (!sync) throw new InputError('Một số món vắng mặt. Hãy quét lại để xác nhận danh sách mới.', 409);
         let alertsSent = 0;
         let telegramOk: boolean | null = null;
         let note = '';
 
         if (telegramConfigured) {
           const now = Date.parse(sync.syncedAt);
-          await enqueueAlerts(env.DB, sync.alerts, now);
           const sent = await deliverDueAlerts(env, appUrl, now, fetchImpl);
           alertsSent = sent.sentCount;
           telegramOk = sent.ok;

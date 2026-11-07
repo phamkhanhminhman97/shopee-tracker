@@ -110,8 +110,8 @@ function toItem(row: ItemRow): TrackedItem {
   };
 }
 
-async function runBatched(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
-  for (let i = 0; i < statements.length; i += 40) await db.batch(statements.slice(i, i + 40));
+async function writeBatch(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
+  if (statements.length) await db.batch(statements);
 }
 
 export async function getAppState(db: D1Database, telegramConfigured: boolean): Promise<AppStateResponse> {
@@ -157,12 +157,12 @@ export interface SyncResult {
   alerts: AlertCandidate[];
 }
 
-// Bản chụp là toàn bộ giỏ đang bán: món vắng mặt được đánh dấu rời giỏ nhưng giữ lịch sử,
-// món quay lại giỏ nối tiếp lịch sử cũ.
+// Một bản chụp thiếu món có thể do Shopee chưa nạp xong. Chỉ chấp nhận vắng mặt sau khi quét lại.
 export async function upsertCartSnapshot(
   db: D1Database,
   snapshot: CartSnapshotItem[],
-  now: string = new Date().toISOString()
+  now: string = new Date().toISOString(),
+  queueAlerts = false
 ): Promise<SyncResult | null> {
   const existing = new Map<string, ItemRow>();
   const legacyKeys = new Map<string, string>();
@@ -177,15 +177,15 @@ export async function upsertCartSnapshot(
     seen.set(existing.has(key) ? key : legacyKeys.get(key) ?? key, item);
   }
 
-  const active = [...existing.values()].filter(row => row.in_cart === 1);
-  const kept = active.filter(row => seen.has(row.cart_key)).length;
-  const shrink = (active.length >= 5 && kept * 2 < active.length) || (active.length > 0 && seen.size === 0);
-  const signature = shrink ? JSON.stringify([...seen.keys()].sort()) : '';
+  const missing = [...existing.values()].filter(row => row.in_cart === 1 && !seen.has(row.cart_key));
+  const signature = missing.length ? JSON.stringify([...seen.keys()].sort()) : '';
   const pending = await getTrackerState(db, 'pending_cart');
   const separator = pending?.indexOf('\n') ?? -1;
-  const matches = pending && separator > 0 && pending.slice(separator + 1) === signature &&
-    Date.parse(now) - Number(pending.slice(0, separator)) <= 60 * 60_000;
-  if (shrink && !matches) {
+  const seenAt = Date.parse(now);
+  const pendingAge = seenAt - Number(pending?.slice(0, separator));
+  const matches = pending && separator > 0 && pending.slice(separator + 1) === signature
+    && pendingAge >= 0 && pendingAge <= 60 * 60_000;
+  if (missing.length && !matches) {
     await setTrackerState(db, 'pending_cart', Date.parse(now) + '\n' + signature);
     return null;
   }
@@ -254,8 +254,9 @@ export async function upsertCartSnapshot(
         changed++;
         statements.push(recordPrice(key, snap));
       }
-      // Giá tăng từ 5% so với mức đã báo thì xoá mốc đã báo, để lần giảm sau được báo lại.
+      // Chỉ canh lại khi giá vượt ngưỡng và cách mức đã báo đủ xa.
       const lastAlerted =
+        old.target_price !== null && effective > old.target_price &&
         old.last_alerted_price !== null && effective >= Math.round(old.last_alerted_price * 1.05)
           ? null
           : old.last_alerted_price;
@@ -296,25 +297,22 @@ export async function upsertCartSnapshot(
       };
     }
 
-    const deals = eligibleDeals(tracked, Date.parse(now));
-    if (deals.length) alerts.push({ item: tracked, deals });
-  }
-
-  for (const [key, row] of existing) {
-    if (row.in_cart === 1 && !seen.has(key)) {
-      statements.push(db.prepare('UPDATE cart_items SET in_cart = 0 WHERE cart_key = ?').bind(key));
+    const deals = eligibleDeals(tracked, seenAt);
+    if (deals.length) {
+      alerts.push({ item: tracked, deals });
+      if (queueAlerts) statements.push(db.prepare(
+        'INSERT INTO alert_outbox (cart_key, observed_at, unit_price, effective_price, next_attempt_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(cart_key) DO UPDATE SET observed_at = excluded.observed_at, unit_price = excluded.unit_price, effective_price = excluded.effective_price'
+      ).bind(key, seenAt, tracked.unitPrice, tracked.effectivePrice, seenAt));
     }
   }
 
-  await runBatched(db, statements);
-  if (pending) await setTrackerState(db, 'pending_cart', '');
-  return { syncedAt: now, total: seen.size, changed, alerts };
-}
+  for (const row of missing) {
+    statements.push(db.prepare('UPDATE cart_items SET in_cart = 0 WHERE cart_key = ?').bind(row.cart_key));
+  }
 
-export async function enqueueAlerts(db: D1Database, alerts: AlertCandidate[], now: number): Promise<void> {
-  await runBatched(db, alerts.map(({ item }) => db.prepare(
-    'INSERT INTO alert_outbox (cart_key, observed_at, unit_price, effective_price, next_attempt_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(cart_key) DO UPDATE SET observed_at = excluded.observed_at, unit_price = excluded.unit_price, effective_price = excluded.effective_price'
-  ).bind(item.cartKey, now, item.unitPrice, item.effectivePrice, now)));
+  if (pending) statements.push(db.prepare("DELETE FROM tracker_state WHERE key = 'pending_cart'"));
+  await writeBatch(db, statements);
+  return { syncedAt: now, total: seen.size, changed, alerts };
 }
 
 export async function dueAlerts(db: D1Database, now: number) {
@@ -329,7 +327,7 @@ export async function dueAlerts(db: D1Database, now: number) {
 }
 
 export async function markAlertsDelivered(db: D1Database, alerts: AlertCandidate[], at: string, queued = false): Promise<void> {
-  await runBatched(
+  await writeBatch(
     db,
     alerts.flatMap(({ item, deals }) => {
       const kinds = new Set(deals.map(deal => deal.kind));

@@ -3,6 +3,7 @@ import { extractShopeeCartFromDom } from '../src/lib/cart-parser.ts';
 interface ScrapeResult {
   ok: boolean;
   blocked?: boolean;
+  retryable?: boolean;
   cartEmpty?: boolean;
   error?: string;
   items?: ReturnType<typeof extractShopeeCartFromDom>;
@@ -46,11 +47,11 @@ async function scrapeCart(): Promise<ScrapeResult> {
     if (empty) return { ok: true, items: [], cartEmpty: true };
     return { ok: false, error: 'Chưa thấy danh sách sản phẩm trên trang giỏ hàng.' };
   }
-  if (stable < 2) return { ok: false, error: 'Giỏ hàng vẫn đang tải. Hãy quét lại.' };
+  if (stable < 2) return { ok: false, retryable: true, error: 'Giỏ hàng vẫn đang tải. Tiện ích sẽ thử lại.' };
   const stats = { activeRows: 0 };
   const items = extractShopeeCartFromDom(document, window, stats);
-  if (stats.activeRows > 0 && (!items.length || items.length * 5 < stats.activeRows * 4)) {
-    return { ok: false, error: 'Chỉ đọc được ' + items.length + '/' + stats.activeRows + ' món. Giữ lại giỏ đã lưu.' };
+  if (items.length !== stats.activeRows) {
+    return { ok: false, retryable: true, error: 'Chỉ đọc được ' + items.length + '/' + stats.activeRows + ' món. Giữ lại giỏ đã lưu và thử lại.' };
   }
   return { ok: true, items, cartEmpty: stats.activeRows === 0 };
 }

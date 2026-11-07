@@ -24,9 +24,9 @@ Bản cũ (nền giấy ấm, đỏ gạch, xanh rêu, Manrope, nút chuyển ch
 | Chữ | Geist 400/500/600 tự host (có tiếng Việt), số tabular | Cột giá thẳng hàng; không tải phông từ bên thứ ba (CSP `font-src 'self'`) |
 | Thang chữ | 12/16, 14/20, 20/28, 24/32 | Cùng thang với memories |
 | Khoảng cách, bo góc | Biến `--s-*` (2 đến 96 px), `--r-*` (4, 6, 8, 12) | Không có giá trị lẻ |
-| Bố cục | Thanh trên cùng màu rail (tên, tab, tìm, sắp xếp, dòng đồng bộ), bên dưới là một danh sách | Mọi thứ cho quyết định mua nằm trong một màn |
-| Dòng sản phẩm | Ảnh 56 px, shop, tên, chip, giá 20 px, "Đặt giá canh" và nút mở Shopee dạng biểu tượng | Giá là thứ to nhất trên dòng |
-| Điểm nhấn | Chip viền hổ phách kèm biểu tượng và chữ nêu lý do, giá hổ phách | Món đáng chốt có chữ giải thích, không chỉ dựa vào màu |
+| Bố cục | Tên và thời gian cập nhật nằm cạnh điều hướng. Tìm, sắp xếp và đổi vị trí ở ngay trên danh sách | Đầu trang gọn và các nút tác động đến danh sách nằm cùng chỗ |
+| Dòng sản phẩm | Ảnh, tên và phân loại; cột giá căn phải trên desktop; nút Giá canh và biểu tượng mở Shopee | Tên và giá được đọc trước; nút Giá canh mở lịch sử, voucher và ghi chú khuyến mãi |
+| Điểm nhấn | Giá và lý do đáng chốt dùng chữ hổ phách, không bao quanh mỗi ghi chú bằng viền | Món đáng chốt có chữ giải thích và giá để so trực tiếp |
 | Biểu tượng | Phosphor regular nhúng SVG: tìm, đóng, mở ngoài, mũi tên chọn, chuông tắt, cảnh báo, xu hướng giảm, gắn kết | Cùng kho với memories, giấy phép ở `PHOSPHOR_LICENSE.txt` |
 | Ảnh sản phẩm | Bản `_tn` của Shopee (320 px) | Đã kiểm 25/25 ảnh trong giỏ trả 200; tổng 639 KB thay vì 11,2 MB |
 | Trạng thái | Khung xương khi tải, thông báo lỗi có nút Tải lại, sổ rỗng có nút tới hướng dẫn, cảnh báo quá 8 giờ chưa đồng bộ | Không có vòng quay |
@@ -51,9 +51,9 @@ Sáng, viền điều khiển trên thanh trên cùng (`#EBEBEB`): 3,10. Chữ c
 
 ## Bố cục theo độ rộng
 
-1. **Từ 900 px:** mỗi dòng nằm trên một hàng: ảnh, tên và chip, giá, hai nút.
-2. **640 đến 899 px:** giá nằm bên phải tên, các nút xuống hàng dưới tên.
-3. **Dưới 640 px:** thanh trên cùng không còn dính đầu trang; ô tìm và ô sắp xếp chung một hàng; mỗi dòng gồm ảnh và tên, giá một hàng riêng, nút "Đặt giá canh" giãn hết chiều ngang cạnh nút mở Shopee.
+1. **Từ 800 px:** mỗi dòng có ảnh, tên và phân loại, cột giá, rồi hai nút. Cột giá và nút thẳng hàng giữa các món.
+2. **640 đến 799 px:** giữ cột giá và thao tác, giảm kích thước ảnh và khoảng cách để chừa chỗ cho tên.
+3. **Dưới 640 px:** đầu trang không dính. Ảnh và tên ở hàng trên, giá và thao tác ở hàng dưới. Dưới 560 px, ô tìm dùng trọn một hàng; sắp xếp và đổi vị trí dùng chung hàng kế tiếp. Nhật ký quét có ba cột và ngắt dòng theo màn hình.
 
 ## Đã bỏ
 

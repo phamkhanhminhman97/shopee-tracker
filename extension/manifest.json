@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sổ Canh Giá Shopee",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minimum_chrome_version": "120",
   "description": "Đọc giá giỏ hàng Shopee định kỳ mỗi 3 đến 6 giờ trên Chrome đang đăng nhập và đồng bộ lên Sổ Canh Giá cá nhân.",
   "permissions": ["alarms", "storage", "scripting"],

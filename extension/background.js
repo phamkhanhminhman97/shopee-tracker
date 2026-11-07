@@ -49,10 +49,11 @@ function waitForLoad(tabId, timeoutMs = 25000) {
 
 async function saveStatus(status) {
   const at = Date.now();
-  await chrome.storage.local.set({ lastStatus: { ...status, at }, ...(status.ok ? { lastOkAt: at } : {}) });
+  const lastStatus = { ...status, at };
+  await chrome.storage.local.set({ lastStatus, ...(status.ok ? { lastOkAt: at } : {}) });
   await chrome.action.setBadgeText({ text: status.ok ? '' : '!' });
   if (!status.ok) await chrome.action.setBadgeBackgroundColor({ color: '#7A4212' });
-  return status;
+  return lastStatus;
 }
 
 async function scanCart(source) {
@@ -84,6 +85,8 @@ async function scanCart(source) {
         await chrome.storage.local.set({ blocked: true });
         await clearRetry();
         if (source === 'manual') tempTabId = null;
+      } else if (scrape?.retryable) {
+        await scheduleRetry();
       }
       return saveStatus({ ok: false, error: (scrape && scrape.error) || 'Không đọc được giỏ hàng Shopee.' });
     }
@@ -130,7 +133,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === 'SYNC_NOW') {
-    scanCart('manual').then(sendResponse);
+    scanCart('manual').then(sendResponse, () => sendResponse({ ok: false, error: 'Không hoàn thành được lượt quét.' }));
     return true;
   }
   return false;
