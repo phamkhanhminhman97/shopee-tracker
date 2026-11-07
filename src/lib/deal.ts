@@ -15,33 +15,36 @@ const LOW_MIN_SAVING = 10_000;
 const LOW_MIN_PCT = 5;
 const LIVE_COOLDOWN_MS = 12 * 3_600_000;
 
-export function evaluateDeal(item: TrackedItem): Deal {
+function dealOptions(item: TrackedItem): Deal[] {
   const hasLive = item.streamingPrice !== null && item.streamingPrice > 0 && item.streamingPrice < item.unitPrice;
   const liveSaving = hasLive ? item.unitPrice - (item.streamingPrice as number) : 0;
   const livePct = (liveSaving / item.unitPrice) * 100;
   const lowSaving = Math.max(0, item.firstUnitPrice - item.unitPrice);
   const lowPct = (lowSaving / item.firstUnitPrice) * 100;
 
-  let reason = '';
-  let kind: Deal['kind'] = null;
+  const channel = hasLive ? 'Shopee Live' : 'Giỏ thường';
+  const savings = Math.max(lowSaving, liveSaving);
+  const options: Deal[] = [];
+  const add = (kind: Deal['kind'], reason: string) => options.push({ isWorth: kind !== null, kind, reason, channel, savings });
   if (item.targetPrice !== null && item.effectivePrice <= item.targetPrice) {
-    kind = 'target';
-    reason = 'Đã chạm giá canh ' + formatVnd(item.targetPrice);
-  } else if (item.unitPrice <= item.minUnitPrice && lowSaving >= LOW_MIN_SAVING && lowPct >= LOW_MIN_PCT) {
-    kind = 'low';
-    reason = 'Đáy giá giỏ, rẻ hơn ' + formatVnd(lowSaving) + ' (' + Math.round(lowPct) + '%) so với lúc bắt đầu canh';
-  } else if (liveSaving >= LIVE_MIN_SAVING && livePct >= LIVE_MIN_PCT) {
-    kind = 'live';
-    reason = 'Giá Live rẻ hơn ' + formatVnd(liveSaving) + ' (' + Math.round(livePct) + '%)';
+    add('target', 'Đã chạm giá canh ' + formatVnd(item.targetPrice));
   }
+  if (item.unitPrice <= item.minUnitPrice && lowSaving >= LOW_MIN_SAVING && lowPct >= LOW_MIN_PCT) {
+    add('low', 'Đáy giá giỏ, rẻ hơn ' + formatVnd(lowSaving) + ' (' + Math.round(lowPct) + '%) so với lúc bắt đầu canh');
+  }
+  if (liveSaving >= LIVE_MIN_SAVING && livePct >= LIVE_MIN_PCT) {
+    add('live', 'Giá Live rẻ hơn ' + formatVnd(liveSaving) + ' (' + Math.round(livePct) + '%)');
+  }
+  if (!options.length) add(null, '');
+  return options;
+}
 
-  return {
-    isWorth: reason !== '',
-    kind,
-    reason,
-    channel: hasLive ? 'Shopee Live' : 'Giỏ thường',
-    savings: Math.max(lowSaving, liveSaving),
-  };
+export function evaluateDeal(item: TrackedItem): Deal {
+  return dealOptions(item)[0];
+}
+
+export function eligibleDeals(item: TrackedItem, now: number): Deal[] {
+  return dealOptions(item).filter(deal => shouldAlert(item, deal, now));
 }
 
 export function shouldAlert(item: TrackedItem, deal: Deal, now: number): boolean {

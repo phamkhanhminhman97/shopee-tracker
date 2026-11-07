@@ -6,6 +6,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { handleApiRequest } from '../src/worker/index.ts';
 import type { Env } from '../src/worker/env.d.ts';
 import { checkSyncHealth } from '../src/worker/monitor.ts';
+import { retryPendingAlerts } from '../src/worker/alert-delivery.ts';
 import { markAlertsDelivered, recordSyncRun, upsertCartSnapshot } from '../src/worker/store.ts';
 import type { AppStateResponse, CartSnapshotItem } from '../src/lib/model.ts';
 
@@ -44,7 +45,7 @@ const snapshotItem = (overrides: Partial<CartSnapshotItem> = {}): CartSnapshotIt
 });
 
 async function migrateAll(db: D1Database) {
-  for (const file of ['0001_init.sql', '0002_trim.sql', '0003_tracker_state.sql', '0004_price_baselines.sql']) {
+  for (const file of ['0001_init.sql', '0002_trim.sql', '0003_tracker_state.sql', '0004_price_baselines.sql', '0005_alert_outbox.sql']) {
     await migrate(db, file);
   }
 }
@@ -270,7 +271,7 @@ test('mốc giá giỏ từ lịch sử, Live có giãn cách riêng, biểu đ�
       const run = await upsertCartSnapshot(db, [snapshotItem({ unitPrice, streamingPrice })], at);
       assert.ok(run);
       await markAlertsDelivered(db, run.alerts, at);
-      return run.alerts.map(alert => alert.deal.kind);
+      return run.alerts.flatMap(alert => alert.deals.map(deal => deal.kind));
     };
     assert.deepEqual(await sync(389_000, 359_000, 1), ['live']);
     assert.deepEqual(await sync(389_000, null, 2), []);
@@ -278,6 +279,8 @@ test('mốc giá giỏ từ lịch sử, Live có giãn cách riêng, biểu đ�
     assert.deepEqual(await sync(389_000, 359_000, 14), ['live']);
     assert.deepEqual(await sync(350_000, null, 15), ['low']);
     assert.deepEqual(await sync(350_000, null, 16), []);
+    assert.deepEqual(await sync(350_000, 300_000, 27), ['live']);
+    assert.deepEqual(await sync(350_000, 300_000, 28), []);
     await db.prepare(`WITH RECURSIVE prices(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM prices WHERE n<250)
       INSERT INTO price_history (cart_key, recorded_at, unit_price) SELECT ?, ?, 400000+n FROM prices`)
       .bind(key, first).run();
@@ -286,6 +289,60 @@ test('mốc giá giỏ từ lịch sử, Live có giãn cách riêng, biểu đ�
     assert.equal(points.length, 200);
     assert.equal(points[0].unitPrice, 400_051);
     assert.equal(points.at(-1)?.unitPrice, 400_250);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('Telegram chia đủ 11 món, chỉ đánh dấu món đã gửi và thử lại tin lỗi', async () => {
+  const { mf, db } = await openDb();
+  try {
+    await migrateAll(db);
+    const env: Env = { DB: db, TELEGRAM_BOT_TOKEN: 'fake', TELEGRAM_CHAT_ID: '-1' };
+    const messages: string[] = [];
+    let fail = false;
+    const telegram: typeof fetch = async (_input, init) => {
+      const { text } = JSON.parse(String(init?.body)) as { text: string };
+      messages.push(text);
+      if (fail || messages.length === 2) return Response.json({ ok: false, parameters: { retry_after: 420 } }, { status: 429 });
+      return Response.json({ ok: true });
+    };
+    const sync = async (price: number) => {
+      const items = Array.from({ length: 11 }, (_, i) => snapshotItem({
+        shopId: '1', itemId: String(i + 1), title: 'Món mẫu ' + (i + 1), unitPrice: price,
+      }));
+      const result = await handleApiRequest(new Request('https://example.test/api/sync/cart', {
+        method: 'POST', headers: writeHeaders, body: JSON.stringify({ items }),
+      }), env, telegram);
+      assert.equal(result.status, 200);
+      return await result.json() as { alertsSent: number; run: { syncedAt: string; note: string; telegramOk: boolean } };
+    };
+    const marked = () => db.prepare('SELECT count(*) AS n FROM cart_items WHERE last_low_alert_price = 220000').first<number>('n');
+    await sync(300_000);
+    const sale = await sync(220_000);
+    assert.equal(sale.alertsSent, 10);
+    assert.equal(sale.run.telegramOk, false);
+    assert.match(sale.run.note, /1 món chờ gửi/);
+    assert.equal(await marked(), 10);
+    assert.equal(messages.length, 2);
+    assert.doesNotMatch(messages[0], /Món mẫu 11</);
+    assert.match(messages[1], /Món mẫu 11</);
+    const now = Date.parse(sale.run.syncedAt);
+    await retryPendingAlerts(env, now + 6 * 60_000, telegram);
+    assert.equal(messages.length, 2);
+    await retryPendingAlerts(env, now + 7 * 60_000, telegram);
+    assert.equal(messages.length, 3);
+    assert.match(messages[2], /Món mẫu 11</);
+    assert.equal(await marked(), 11);
+    assert.equal(await db.prepare('SELECT count(*) AS n FROM alert_outbox').first<number>('n'), 0);
+
+    fail = true;
+    const expired = await sync(180_000);
+    const sends = messages.length;
+    await retryPendingAlerts(env, Date.parse(expired.run.syncedAt) + 30 * 60_000, telegram);
+    assert.equal(messages.length, sends);
+    assert.equal(await db.prepare('SELECT count(*) AS n FROM alert_outbox').first<number>('n'), 0);
+    assert.equal(await marked(), 11);
   } finally {
     await mf.dispose();
   }

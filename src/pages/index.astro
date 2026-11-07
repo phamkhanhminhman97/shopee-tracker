@@ -45,6 +45,7 @@ import { ICONS } from '../lib/icons.ts';
                 <option value="deal">Ưu tiên giá tốt</option>
                 <option value="cart">Thứ tự trong giỏ</option>
                 <option value="price">Giá thấp đến cao</option>
+                <option value="manual">Tự sắp xếp</option>
               </select>
               <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['caret-down']} />
             </div>
@@ -55,7 +56,14 @@ import { ICONS } from '../lib/icons.ts';
     </header>
 
     <main id="main" class="content">
-      <div id="ledger"><div id="list"></div></div>
+      <div id="ledger">
+        <div id="order-toolbar" class="order-toolbar" hidden>
+          <p id="order-help" class="small muted" hidden><span class="drag-copy">Kéo món hoặc dùng mũi tên lên/xuống.</span><span class="touch-copy">Dùng mũi tên lên/xuống để đổi vị trí.</span> Thứ tự lưu trên trình duyệt này.</p>
+          <button id="edit-order" type="button" class="btn" aria-pressed="false">Đổi vị trí</button>
+        </div>
+        <p id="order-status" class="vh" role="status"></p>
+        <div id="list"></div>
+      </div>
       <div id="connect" hidden></div>
     </main>
 

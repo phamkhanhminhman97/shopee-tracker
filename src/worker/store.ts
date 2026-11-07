@@ -1,4 +1,4 @@
-import { evaluateDeal, shouldAlert } from '../lib/deal.ts';
+import { eligibleDeals } from '../lib/deal.ts';
 import {
   buildCartKey,
   computeEffectivePrice,
@@ -28,6 +28,12 @@ export async function claimUntil(db: D1Database, key: string, value: string, now
 
 export async function releaseClaim(db: D1Database, key: string, value: string): Promise<void> {
   await db.prepare('DELETE FROM tracker_state WHERE key = ? AND value = ?').bind(key, value).run();
+}
+
+export async function claimCartSync(db: D1Database): Promise<string | null> {
+  const now = Date.now();
+  const claim = (now + 120_000) + ':' + crypto.randomUUID();
+  return await claimUntil(db, 'sync_lock', claim, now) ? claim : null;
 }
 
 interface ItemRow {
@@ -290,8 +296,8 @@ export async function upsertCartSnapshot(
       };
     }
 
-    const deal = evaluateDeal(tracked);
-    if (shouldAlert(tracked, deal, Date.parse(now))) alerts.push({ item: tracked, deal });
+    const deals = eligibleDeals(tracked, Date.parse(now));
+    if (deals.length) alerts.push({ item: tracked, deals });
   }
 
   for (const [key, row] of existing) {
@@ -305,15 +311,42 @@ export async function upsertCartSnapshot(
   return { syncedAt: now, total: seen.size, changed, alerts };
 }
 
-export async function markAlertsDelivered(db: D1Database, alerts: AlertCandidate[], at: string): Promise<void> {
+export async function enqueueAlerts(db: D1Database, alerts: AlertCandidate[], now: number): Promise<void> {
+  await runBatched(db, alerts.map(({ item }) => db.prepare(
+    'INSERT INTO alert_outbox (cart_key, observed_at, unit_price, effective_price, next_attempt_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(cart_key) DO UPDATE SET observed_at = excluded.observed_at, unit_price = excluded.unit_price, effective_price = excluded.effective_price'
+  ).bind(item.cartKey, now, item.unitPrice, item.effectivePrice, now)));
+}
+
+export async function dueAlerts(db: D1Database, now: number) {
+  const { results } = await db.prepare(`
+    SELECT c.*, q.observed_at,
+      (c.in_cart = 1 AND c.unit_price = q.unit_price AND c.effective_price = q.effective_price) AS still_current
+    FROM alert_outbox q
+    JOIN cart_items c ON c.cart_key = q.cart_key
+    WHERE q.next_attempt_at <= ? ORDER BY q.next_attempt_at, c.cart_order LIMIT 20
+  `).bind(now).all<ItemRow & { observed_at: number; still_current: number }>();
+  return results.map(row => ({ item: toItem(row), observedAt: row.observed_at, stillCurrent: row.still_current === 1 }));
+}
+
+export async function markAlertsDelivered(db: D1Database, alerts: AlertCandidate[], at: string, queued = false): Promise<void> {
   await runBatched(
     db,
-    alerts.map(({ item, deal }) => {
-      if (deal.kind === 'low') return db.prepare('UPDATE cart_items SET last_low_alert_price = ? WHERE cart_key = ?')
-        .bind(item.unitPrice, item.cartKey);
-      if (deal.kind === 'live') return db.prepare('UPDATE cart_items SET last_live_alert_price = ?, last_live_alert_at = ? WHERE cart_key = ?')
-        .bind(item.effectivePrice, at, item.cartKey);
-      return db.prepare('UPDATE cart_items SET last_alerted_price = ? WHERE cart_key = ?').bind(item.effectivePrice, item.cartKey);
+    alerts.flatMap(({ item, deals }) => {
+      const kinds = new Set(deals.map(deal => deal.kind));
+      const update = db.prepare(`
+        UPDATE cart_items SET
+          last_alerted_price = COALESCE(?, last_alerted_price),
+          last_low_alert_price = COALESCE(?, last_low_alert_price),
+          last_live_alert_price = COALESCE(?, last_live_alert_price),
+          last_live_alert_at = COALESCE(?, last_live_alert_at)
+        WHERE cart_key = ?
+      `).bind(
+        kinds.has('target') ? item.effectivePrice : null,
+        kinds.has('low') ? item.unitPrice : null,
+        kinds.has('live') ? item.effectivePrice : null,
+        kinds.has('live') ? at : null, item.cartKey
+      );
+      return queued ? [update, db.prepare('DELETE FROM alert_outbox WHERE cart_key = ?').bind(item.cartKey)] : [update];
     })
   );
 }

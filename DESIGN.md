@@ -4,6 +4,8 @@ Popup và dấu cảnh báo trên biểu tượng tiện ích dùng cùng màu h
 
 Biểu tượng màn hình chính lấy từ `favicon.svg`: PNG 192/512, bản Android maskable và Apple touch 180. Tạo lại bằng `node scripts/make-icons.mjs`.
 
+Chỉ hiện tay nắm và mũi tên khi bấm **Đổi vị trí** trong giỏ. Thiết bị cảm ứng dùng mũi tên có vùng chạm 44 px. Khi dùng bàn phím, focus đi theo món vừa chuyển.
+
 Design Read: sổ giá cá nhân cho một người mua trong gia đình, dùng chung ngôn ngữ thiết kế với `websites/memories` (xám trung tính, một màu nhấn hổ phách, Geist, Phosphor), theo hệ điều hành sáng hoặc tối. Dial ENERGY 2 / RHYTHM 2 / MOTION 1.
 
 ## Nguồn cảm hứng

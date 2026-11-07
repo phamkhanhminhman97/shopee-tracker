@@ -39,7 +39,8 @@ const server = http.createServer(async (req, res) => {
     }
     return res.end(JSON.stringify(req.url === '/api/state' ? state : { points: [
       { recordedAt: '2026-11-06T00:00:00.000Z', unitPrice: 529_000, effectivePrice: 499_000 },
-      { recordedAt: syncedAt, unitPrice: 529_000, effectivePrice: 398_000 },
+      { recordedAt: '2026-11-06T01:00:00.000Z', unitPrice: 529_000, effectivePrice: 440_000 },
+      { recordedAt: '2026-11-07T00:00:00.000Z', unitPrice: 529_000, effectivePrice: 398_000 },
     ] }));
   }
   const path = resolve(dist, '.' + (req.url === '/' ? '/index.html' : req.url));
@@ -112,6 +113,8 @@ try {
   const chart = await page.$eval('#chart svg', el => ({ width: el.clientWidth, view: el.viewBox.baseVal.width }));
   assert.equal(chart.width, chart.view, 'Biểu đồ không được thu chữ theo viewBox desktop');
   assert.match(await page.$eval('#chart-range', el => el.textContent), /398\.000.+499\.000/);
+  const xs = await page.$$eval('#chart circle', nodes => nodes.map(node => Number(node.getAttribute('cx'))));
+  assert.ok(Math.abs((xs[1] - xs[0]) / (xs[2] - xs[0]) - 1 / 24) < 0.005, 'Điểm cách một giờ phải gần hơn điểm cách 23 giờ');
   assert.equal(await page.$$eval('[data-preset]', els => els.length === 3 && els.every(el => Number(el.dataset.preset) < 398_000)), true);
   const target = await page.$('#target');
   const box = await target.boundingBox();
@@ -136,8 +139,47 @@ try {
   await page.click('[data-view="connect"]');
   assert.equal(await page.$eval('[data-view="connect"]', el => el.getAttribute('aria-pressed')), 'true');
   assert.equal(await page.$eval('.table-scroll', el => el.tabIndex), 0);
+
+  await page.setViewport({ width: 320, height: 700, isMobile: true, hasTouch: true });
+  await page.goto(address);
+  await page.waitForSelector('.row');
+  const keys = () => page.$$eval('.row', rows => rows.map(row => row.dataset.key));
+  const initial = await keys();
+  await page.tap('#edit-order');
+  assert.equal(await page.$eval('#sort', el => el.value), 'manual');
+  const moveDown = '.row:first-child button[data-move="down"]';
+  assert.equal(await page.$eval(moveDown, el => el.getBoundingClientRect().width >= 44), true);
+  await page.tap(moveDown);
+  assert.deepEqual((await keys()).slice(0, 2), [initial[1], initial[0]]);
+  const movedFocus = await page.evaluate(() => document.activeElement.closest('.row')?.dataset.key);
+  assert.equal(movedFocus, initial[0]);
+  await page.tap('#edit-order');
+  await page.reload();
+  await page.waitForSelector('.row');
+  assert.equal(await page.$eval('#sort', el => el.value), 'manual');
+  assert.deepEqual((await keys()).slice(0, 2), [initial[1], initial[0]]);
+
+  await page.setViewport({ width: 1440, height: 900 });
+  await page.goto(address);
+  await page.waitForSelector('.row');
+  await page.click('#edit-order');
+  await page.setDragInterception(true);
+  const grip = await (await page.$('.row:first-child [data-grip]')).boundingBox();
+  const destination = await (await page.$('.row:nth-child(3)')).boundingBox();
+  assert.ok(grip && destination);
+  await page.mouse.dragAndDrop(
+    { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 },
+    { x: destination.x + destination.width / 2, y: destination.y + destination.height * 0.75 },
+  );
+  assert.deepEqual((await keys()).slice(0, 3), [initial[0], initial[2], initial[1]]);
+  await page.click('#edit-order');
+  await page.select('#sort', 'cart');
+  assert.deepEqual((await keys()).slice(0, 3), initial.slice(0, 3));
+  await page.select('#sort', 'manual');
+  assert.deepEqual((await keys()).slice(0, 3), [initial[0], initial[2], initial[1]]);
+
   assert.deepEqual(errors, []);
-  console.log('PASS: giao diện ở 5 khung màn hình, giá canh, biểu đồ, focus và CSP');
+  console.log('PASS: 5 khung màn hình, trục thời gian, focus, nút đổi vị trí, kéo thả và thứ tự sau tải lại');
 } finally {
   await browser?.close();
   server.close();

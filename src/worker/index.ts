@@ -2,17 +2,19 @@ import { evaluateDeal } from '../lib/deal.ts';
 import type { Env } from './env.d.ts';
 import { InputError, isPrice, parseSnapshot, readJson, requireWriteHeader } from './input.ts';
 import { checkSyncHealth } from './monitor.ts';
+import { deliverDueAlerts, retryPendingAlerts } from './alert-delivery.ts';
 import {
   getAppState,
   getItemHistory,
   claimUntil,
+  claimCartSync,
+  enqueueAlerts,
   releaseClaim,
-  markAlertsDelivered,
   recordSyncRun,
   updateItemSettings,
   upsertCartSnapshot,
 } from './store.ts';
-import { buildAlertMessageHtml, buildTestMessageHtml, sendTelegramHtml } from './telegram.ts';
+import { buildTestMessageHtml, sendTelegramHtml } from './telegram.ts';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -76,9 +78,8 @@ export async function handleApiRequest(
       const body = await readJson(request);
       const items = parseSnapshot(body);
       const source = typeof body.source === 'string' && /^[a-z0-9-]{1,48}$/.test(body.source) ? body.source : 'chrome';
-      const now = Date.now();
-      const claim = (now + 120_000) + ':' + crypto.randomUUID();
-      if (!await claimUntil(env.DB, 'sync_lock', claim, now)) throw new InputError('Đang xử lý lượt đồng bộ khác.', 409);
+      const claim = await claimCartSync(env.DB);
+      if (!claim) throw new InputError('Đang xử lý lượt đồng bộ khác.', 409);
 
       try {
         const sync = await upsertCartSnapshot(env.DB, items);
@@ -87,20 +88,19 @@ export async function handleApiRequest(
         let telegramOk: boolean | null = null;
         let note = '';
 
-        if (sync.alerts.length > 0) {
-          if (telegramConfigured) {
-            const sent = await sendTelegramHtml(env, buildAlertMessageHtml(sync.alerts, appUrl), fetchImpl);
-            telegramOk = sent.ok;
-            if (sent.ok) {
-              alertsSent = sync.alerts.length;
-              await markAlertsDelivered(env.DB, sync.alerts, sync.syncedAt);
-              note = 'Đã báo ' + alertsSent + ' món về Telegram';
-            } else {
-              note = 'Gửi Telegram lỗi: ' + (sent.error || 'không rõ');
-            }
-          } else {
-            note = sync.alerts.length + ' món đáng chốt nhưng chưa cấu hình Telegram';
-          }
+        if (telegramConfigured) {
+          const now = Date.parse(sync.syncedAt);
+          await enqueueAlerts(env.DB, sync.alerts, now);
+          const sent = await deliverDueAlerts(env, appUrl, now, fetchImpl);
+          alertsSent = sent.sentCount;
+          telegramOk = sent.ok;
+          const queued = await env.DB.prepare('SELECT count(*) FROM alert_outbox').first<number>('count(*)');
+          note = [
+            alertsSent ? 'Đã báo ' + alertsSent + ' món' : '',
+            queued ? queued + ' món chờ gửi' : '',
+          ].filter(Boolean).join(' · ');
+        } else if (sync.alerts.length) {
+          note = sync.alerts.length + ' món đáng chốt nhưng chưa cấu hình Telegram';
         }
 
         const run = await recordSyncRun(env.DB, {
@@ -146,7 +146,8 @@ export async function handleApiRequest(
 
 export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    await checkSyncHealth(env, controller.scheduledTime);
+    if (controller.cron === '0 * * * *') await checkSyncHealth(env, controller.scheduledTime);
+    else await retryPendingAlerts(env, Date.now());
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     if (new URL(request.url).pathname.startsWith('/api/')) return handleApiRequest(request, env);

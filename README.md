@@ -10,6 +10,8 @@ Thiết kế: [DESIGN.md](DESIGN.md). Tiến độ rà soát: [KE-HOACH.md](KE-H
 2. **Worker + D1 (`src/worker/`):** giữ lịch sử riêng theo phân loại. Nếu giỏ đã lưu có từ 5 món mà bản mới thiếu hơn nửa, hoặc giỏ từ có hàng chuyển sang rỗng, Worker chờ bản chụp cùng danh sách lần nữa trong một giờ. Worker kiểm tra mỗi giờ và gửi Telegram khi quá 9 giờ chưa nhận lượt quét thành công, rồi báo một lần khi đồng bộ lại.
 3. **Web (`src/pages`, `src/client`):** danh sách giá, tab Đáng chốt, đặt giá canh và biểu đồ lịch sử cho từng món, tab Kết nối (Telegram và nhật ký quét).
 
+Ở **Giỏ hàng**, bấm **Đổi vị trí**, kéo món hoặc dùng mũi tên lên/xuống rồi bấm **Xong**. Chọn **Tự sắp xếp** để xem lại thứ tự đã lưu trên trình duyệt. Thứ tự này chỉ áp dụng trong sổ canh giá.
+
 ## Khi nào báo Telegram (`src/lib/deal.ts`)
 
 - Giá về mức giá canh do bạn đặt.
@@ -17,6 +19,8 @@ Thiết kế: [DESIGN.md](DESIGN.md). Tiến độ rà soát: [KE-HOACH.md](KE-H
 - Giá Shopee Live rẻ hơn giá giỏ thường ít nhất 20.000₫ và 7%. Live rẻ hơn 1.000₫ không tính.
 
 Giá canh có thể báo lại khi giá đã tăng từ 5% rồi giảm xuống. Đáy giá giỏ chỉ báo lại khi rẻ hơn đáy đã báo. Báo giá Live của mỗi món cách nhau ít nhất 12 giờ.
+
+Mỗi món có thể có nhiều lý do đủ điều kiện trong cùng một tin. Danh sách dài được chia thành nhiều tin; chỉ món đã gửi thành công được đánh dấu đã báo. Tin lỗi được thử lại theo lịch 5 phút trong 30 phút kể từ lần ghi nhận; Worker bỏ giá đã đổi, món rời giỏ hoặc đã tắt báo.
 
 ## Giới hạn
 
@@ -45,9 +49,9 @@ npm run preview      # http://127.0.0.1:8788 (Telegram tắt vì không có secr
 - Trên macOS, sau khi kiểm lệnh sao lưu tay thành công, chạy `npm run db:backup:schedule` để bật lịch cho tài khoản đang đăng nhập. Máy kiểm tra lúc đăng nhập và lúc 03:30 theo giờ máy mỗi ngày; chỉ xuất bản mới khi chưa có bản sao hoặc bản gần nhất đã đủ 7 ngày. Xem kết quả tại `backups/backup.log`.
 - Để xem cấu hình mà chưa bật lịch: `npm run db:backup:schedule -- --print`. Để tắt lịch đang chạy và bỏ tự khởi động, dùng `launchctl bootout "gui/$(id -u)/com.phamkhanhminhman.shopee-tracker.backup"` rồi chuyển file `com.phamkhanhminhman.shopee-tracker.backup.plist` ra khỏi `~/Library/LaunchAgents/`.
 
-## Đưa bản 0.3.0 lên production
+## Đưa thay đổi lên production
 
 1. Từ thư mục dự án, chạy `npm run db:backup` để xuất bản sao D1 vào `backups/`. Chỉ chạy bước tiếp theo nếu xuất thành công.
-2. Áp migration trước khi đưa mã mới lên `main`: `npx wrangler d1 migrations apply shopee-tracker --remote`.
+2. Áp migration trước khi đưa mã mới lên `main`: `npx wrangler d1 migrations apply shopee-tracker --remote`. Luồng gửi lại Telegram cần `0005_alert_outbox.sql`.
 3. Khi đẩy mã lên `main`, GitHub Actions chạy kiểm tra và deploy Worker. Kiểm tra lần chạy thành công.
-4. Chạy `npm run ext:build` trên máy dùng Shopee, rồi Reload tiện ích 0.3.0 trong Chrome và quét một lượt. Bản cũ sẽ bị API mới từ chối.
+4. Nếu Chrome đang dùng tiện ích trước 0.3.0, chạy `npm run ext:build` trên máy dùng Shopee, Reload tiện ích rồi quét một lượt.

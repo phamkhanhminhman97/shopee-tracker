@@ -10,7 +10,7 @@ import {
 } from '../lib/model.ts';
 
 type View = 'cart' | 'worth' | 'connect';
-type Sort = 'deal' | 'cart' | 'price';
+type Sort = 'deal' | 'cart' | 'price' | 'manual';
 interface Row {
   item: TrackedItem;
   deal: Deal;
@@ -18,6 +18,8 @@ interface Row {
 
 const STALE_HOURS = 8;
 const REFETCH_AFTER_MS = 60_000;
+const ORDER_KEY = 'shopee-tracker:order';
+const SORT_KEY = 'shopee-tracker:sort';
 const SOURCE_LABELS: Record<string, string> = {
   'chrome-initial-sync': 'Lần đầu',
   'chrome-alarm': 'Tự động',
@@ -33,7 +35,10 @@ let loadError = '';
 let loadedAt = 0;
 let view: View = 'cart';
 let query = '';
-let sort: Sort = 'deal';
+let sort: Sort = readSort();
+let manualOrder = readOrder();
+let editingOrder = false;
+let dragKey = '';
 let dialogKey: string | null = null;
 let redrawChart: (() => void) | null = null;
 let telegramSending = false;
@@ -47,6 +52,32 @@ const icon = (name: string): string => '<svg class="i" viewBox="0 0 256 256" ari
 
 // Shopee phục vụ bản 320 px khi thêm hậu tố _tn (đã kiểm 25/25 ảnh trong giỏ): trung bình 25 KB thay vì 458 KB.
 const thumbUrl = (url: string): string => (/susercontent\.com\/file\/[\w-]+$/.test(url) ? url + '_tn' : url);
+
+function readSort(): Sort {
+  try {
+    const saved = localStorage.getItem(SORT_KEY);
+    if (saved === 'cart' || saved === 'price' || saved === 'manual') return saved;
+  } catch {}
+  return 'deal';
+}
+
+function readOrder(): string[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]');
+    if (Array.isArray(saved)) return [...new Set(saved.filter((key): key is string => typeof key === 'string'))];
+  } catch {}
+  return [];
+}
+
+function setSort(value: Sort): void {
+  sort = value;
+  try { localStorage.setItem(SORT_KEY, value); } catch {}
+}
+
+function saveOrder(keys: string[]): void {
+  manualOrder = keys;
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(keys)); } catch {}
+}
 
 function ago(iso: string): string {
   const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60_000));
@@ -63,7 +94,8 @@ function shortDate(iso: string): string {
   return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 function rows(): Row[] {
-  const q = query.trim().toLowerCase();
+  const q = editingOrder ? '' : query.trim().toLowerCase();
+  const ranks = sort === 'manual' ? new Map(manualOrder.map((key, index) => [key, index])) : null;
   const list = (data?.items ?? [])
     .map(item => ({ item, deal: evaluateDeal(item) }))
     .filter(
@@ -72,12 +104,25 @@ function rows(): Row[] {
         (!q || (item.title + ' ' + item.variation + ' ' + item.shopName).toLowerCase().includes(q))
     );
   list.sort((a, b) => {
+    if (ranks) return (ranks.get(a.item.cartKey) ?? ranks.size) - (ranks.get(b.item.cartKey) ?? ranks.size)
+      || a.item.cartOrder - b.item.cartOrder;
     if (sort === 'price') return a.item.effectivePrice - b.item.effectivePrice;
     if (sort === 'deal' && a.deal.isWorth !== b.deal.isWorth) return a.deal.isWorth ? -1 : 1;
     if (sort === 'deal' && a.deal.savings !== b.deal.savings) return b.deal.savings - a.deal.savings;
     return a.item.cartOrder - b.item.cartOrder;
   });
   return list;
+}
+
+function renderOrderToolbar(): void {
+  const enabled = view === 'cart' && (data?.items.length ?? 0) > 1;
+  if (!enabled) editingOrder = false;
+  $('order-toolbar').hidden = !enabled;
+  $('order-help').hidden = !editingOrder;
+  const edit = $('edit-order');
+  edit.textContent = editingOrder ? 'Xong' : 'Đổi vị trí';
+  edit.setAttribute('aria-pressed', String(editingOrder));
+  $<HTMLSelectElement>('sort').value = sort;
 }
 
 function renderChrome(): void {
@@ -112,7 +157,7 @@ function emptyState(iconName: string, title: string, body: string, action = '', 
   return `<div class="empty"${role ? ' role="' + role + '"' : ''}>${icon(iconName)}<h2>${esc(title)}</h2><p>${esc(body)}</p>${action}</div>`;
 }
 
-function renderRow({ item, deal }: Row): string {
+function renderRow({ item, deal }: Row, index: number, list: Row[]): string {
   const notes: string[] = [];
   if (deal.channel === 'Shopee Live') notes.push('Giá Live · giỏ thường ' + formatVnd(item.unitPrice));
   if (item.minEffectivePrice < item.effectivePrice) notes.push('Thấp nhất đã ghi nhận ' + formatVnd(item.minEffectivePrice));
@@ -132,7 +177,18 @@ function renderRow({ item, deal }: Row): string {
     : '<span class="thumb" aria-hidden="true"></span>';
 
   const targetLabel = item.targetPrice ? 'Sửa giá canh' : 'Đặt giá canh';
-  return `<article class="row${deal.isWorth ? ' is-worth' : ''}">
+  const name = esc(item.title + (item.variation ? ', ' + item.variation : ''));
+  const actions = editingOrder
+    ? `<div class="move-actions">
+      <span class="move-grip" data-grip draggable="true" aria-hidden="true" title="Kéo để đổi vị trí">${icon('grip')}</span>
+      <button type="button" class="icbtn" data-move="up" aria-label="Đưa lên: ${name}"${index === 0 ? ' disabled' : ''}>${icon('caret-up')}</button>
+      <button type="button" class="icbtn" data-move="down" aria-label="Đưa xuống: ${name}"${index === list.length - 1 ? ' disabled' : ''}>${icon('caret-down')}</button>
+    </div>`
+    : `<div class="actions">
+      <button type="button" class="btn" data-open="${esc(item.cartKey)}" aria-label="${targetLabel}: ${name}">${targetLabel}</button>
+      <a class="icbtn" href="${esc(item.productUrl)}" target="_blank" rel="noreferrer" aria-label="Mở trên Shopee: ${esc(item.title)}" title="Mở trên Shopee">${icon('arrow-square-out')}</a>
+    </div>`;
+  return `<article class="row${deal.isWorth ? ' is-worth' : ''}" data-key="${esc(item.cartKey)}">
     ${thumb}
     <div class="body">
       <p class="shop">${esc(item.shopName || 'Gian hàng Shopee')}</p>
@@ -144,10 +200,7 @@ function renderRow({ item, deal }: Row): string {
       <div class="price">${formatVnd(item.effectivePrice)}</div>
       ${notes.map(n => '<p class="price-note">' + esc(n) + '</p>').join('')}
     </div>
-    <div class="actions">
-      <button type="button" class="btn" data-open="${esc(item.cartKey)}" aria-label="${targetLabel}: ${esc(item.title + (item.variation ? ', ' + item.variation : ''))}">${targetLabel}</button>
-      <a class="icbtn" href="${esc(item.productUrl)}" target="_blank" rel="noreferrer" aria-label="Mở trên Shopee: ${esc(item.title)}" title="Mở trên Shopee">${icon('arrow-square-out')}</a>
-    </div>
+    ${actions}
   </article>`;
 }
 
@@ -190,7 +243,7 @@ function renderList(): void {
         );
     return;
   }
-  list.innerHTML = '<div class="rows">' + visible.map(renderRow).join('') + '</div>';
+  list.innerHTML = '<div class="rows' + (editingOrder ? ' is-reordering' : '') + '">' + visible.map(renderRow).join('') + '</div>';
 }
 
 function renderConnect(): void {
@@ -220,7 +273,7 @@ function renderConnect(): void {
         <td>${esc(SOURCE_LABELS[r.source] ?? r.source)}</td>
         <td>${r.totalInCart} món</td>
         <td>${r.changedCount} đổi giá</td>
-        <td>${r.alertsSent > 0 ? 'Đã báo ' + r.alertsSent + ' món' : esc(r.note) || 'Không có gì để báo'}</td>
+        <td>${esc(r.note) || (r.alertsSent > 0 ? 'Đã báo ' + r.alertsSent + ' món' : 'Không có gì để báo')}</td>
       </tr>`)
     .join('');
   const table = runs.length
@@ -266,9 +319,10 @@ function updateTelegramFeedback(): void {
 
 function render(): void {
   renderChrome();
+  renderOrderToolbar();
   const connect = view === 'connect';
   $('ledger').hidden = connect;
-  $('tools').hidden = connect;
+  $('tools').hidden = connect || editingOrder;
   $('connect').hidden = !connect;
   if (connect) renderConnect();
   else renderList();
@@ -298,14 +352,16 @@ async function load(): Promise<void> {
     if (!data) loadError = err instanceof TypeError ? 'Không kết nối được tới máy chủ.' : err instanceof Error ? err.message : String(err);
   }
   const focused = document.activeElement;
-  const rowKey = focused?.closest('.row')?.querySelector<HTMLElement>('[data-open]')?.dataset.open;
-  const rowControl = rowKey ? '[data-open="' + CSS.escape(rowKey) + '"]' : '';
+  const rowKey = focused?.closest<HTMLElement>('.row')?.dataset.key;
+  const rowSelector = rowKey ? '[data-key="' + CSS.escape(rowKey) + '"]' : '';
+  const control = focused instanceof HTMLElement && focused.dataset.move
+    ? '[data-move="' + focused.dataset.move + '"]:enabled'
+    : focused?.tagName === 'A' ? 'a' : '[data-open]';
   const scroll = $('runs-scroll')?.scrollLeft;
   render();
   if (scroll && $('runs-scroll')) $('runs-scroll').scrollLeft = scroll;
   if (focused && !focused.isConnected) {
-    const button = rowControl ? document.querySelector<HTMLElement>(rowControl) : null;
-    const target = rowControl ? (focused.tagName === 'A' ? button?.nextElementSibling : button) : $(focused.id);
+    const target = rowSelector ? document.querySelector<HTMLElement>(rowSelector + ' ' + control) : $(focused.id);
     if (target instanceof HTMLElement) target.focus({ preventScroll: true });
     else document.querySelector<HTMLElement>('[data-view="' + view + '"]')?.focus({ preventScroll: true });
   }
@@ -332,8 +388,11 @@ function renderChart(points: PricePoint[], item: TrackedItem, W: number): string
   lo = Math.max(0, lo - margin);
   hi += margin;
 
-  const x = (i: number): number =>
-    series.length === 1 ? W / 2 : pad.l + (i / (series.length - 1)) * (W - pad.l - pad.r);
+  const times = series.map(p => Date.parse(p.recordedAt));
+  const duration = times[times.length - 1] - times[0];
+  const x = (i: number): number => duration > 0
+    ? pad.l + (times[i] - times[0]) / duration * (W - pad.l - pad.r)
+    : W / 2;
   const y = (v: number): number => pad.t + (H - pad.t - pad.b) * (1 - (v - lo) / (hi - lo));
   const steps = (pick: (p: PricePoint) => number): string =>
     series.map((p, i) => (i === 0 ? 'M ' + x(0).toFixed(1) + ' ' + y(pick(p)).toFixed(1) : ' H ' + x(i).toFixed(1) + ' V ' + y(pick(p)).toFixed(1))).join('');
@@ -346,10 +405,10 @@ function renderChart(points: PricePoint[], item: TrackedItem, W: number): string
     series.length > 1
       ? `<path d="${steps(p => p.unitPrice)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="3 3" />
          <path d="${steps(p => p.effectivePrice)}" fill="none" stroke="var(--accent)" stroke-width="2.5" />`
-      : `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(series[0].effectivePrice).toFixed(1)}" y2="${y(series[0].effectivePrice).toFixed(1)}" stroke="var(--accent)" stroke-width="2" />`;
-  const dots = series.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.effectivePrice).toFixed(1)}" r="4" fill="var(--accent)" />`).join('');
-  const axis = `<text x="${pad.l}" y="${H - 6}" font-size="12" fill="var(--muted)">${esc(shortDate(series[0].recordedAt))}</text>` +
-    (series.length > 1
+      : '';
+  const dots = series.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.effectivePrice).toFixed(1)}" r="4" fill="var(--accent)"><title>${esc(shortDate(p.recordedAt))} · ${formatVnd(p.effectivePrice)}</title></circle>`).join('');
+  const axis = `<text x="${duration > 0 ? pad.l : W / 2}" text-anchor="${duration > 0 ? 'start' : 'middle'}" y="${H - 6}" font-size="12" fill="var(--muted)">${esc(shortDate(series[0].recordedAt))}</text>` +
+    (duration > 0
       ? `<text x="${W - pad.r}" y="${H - 6}" text-anchor="end" font-size="12" fill="var(--muted)">${esc(shortDate(series[series.length - 1].recordedAt))}</text>`
       : '');
 
@@ -436,9 +495,87 @@ async function saveSettings(): Promise<void> {
   }
 }
 
+function moveProduct(key: string, target: string, after: boolean, focus?: string): void {
+  if (!editingOrder || key === target) return;
+  const visible = rows().map(row => row.item.cartKey);
+  if (!visible.includes(key) || !visible.includes(target)) return;
+  const active = new Set(visible);
+  const order = visible.filter(id => id !== key);
+  const position = order.indexOf(target) + Number(after);
+  order.splice(position, 0, key);
+  saveOrder([...order, ...manualOrder.filter(id => !active.has(id))]);
+  renderList();
+  const moved = data?.items.find(item => item.cartKey === key);
+  $('order-status').textContent = (moved?.title ?? 'Sản phẩm') + ' ở vị trí ' + (position + 1) + ' / ' + order.length + '.';
+  if (focus) {
+    const row = document.querySelector<HTMLElement>('[data-key="' + CSS.escape(key) + '"]');
+    (row?.querySelector<HTMLButtonElement>('[data-move="' + focus + '"]:enabled')
+      ?? row?.querySelector<HTMLButtonElement>('[data-move]:enabled'))?.focus();
+  }
+}
+
+function bindReordering(): void {
+  $('edit-order').addEventListener('click', () => {
+    editingOrder = !editingOrder;
+    if (editingOrder) {
+      if (!manualOrder.length) saveOrder(rows().map(row => row.item.cartKey));
+      setSort('manual');
+    }
+    render();
+  });
+  const list = $('list');
+  list.addEventListener('click', e => {
+    const button = (e.target as Element).closest<HTMLButtonElement>('[data-move]');
+    const key = button?.closest<HTMLElement>('.row')?.dataset.key;
+    if (!key || !button?.dataset.move) return;
+    const keys = rows().map(row => row.item.cartKey);
+    const down = button.dataset.move === 'down';
+    const other = keys[keys.indexOf(key) + (down ? 1 : -1)];
+    if (other) moveProduct(key, other, down, button.dataset.move);
+  });
+  const clearDrop = () => list.querySelector('.drop-before, .drop-after')?.classList.remove('drop-before', 'drop-after');
+  const dropRow = (event: DragEvent) => (event.target as Element).closest<HTMLElement>('.row');
+  const afterRow = (event: DragEvent, row: HTMLElement) => {
+    const rect = row.getBoundingClientRect();
+    return event.clientY > rect.top + rect.height / 2;
+  };
+  list.addEventListener('dragstart', e => {
+    const grip = (e.target as Element).closest<HTMLElement>('[data-grip]');
+    if (!editingOrder || !grip || !e.dataTransfer) return;
+    dragKey = grip.closest<HTMLElement>('.row')?.dataset.key ?? '';
+    e.dataTransfer.setData('text/plain', dragKey);
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  list.addEventListener('dragover', e => {
+    const row = dropRow(e);
+    if (!dragKey || !row || row.dataset.key === dragKey) {
+      clearDrop();
+      return;
+    }
+    e.preventDefault();
+    clearDrop();
+    row.classList.add(afterRow(e, row) ? 'drop-after' : 'drop-before');
+  });
+  list.addEventListener('dragleave', e => {
+    if (!list.contains(e.relatedTarget as Node | null)) clearDrop();
+  });
+  list.addEventListener('drop', e => {
+    const row = dropRow(e);
+    if (!dragKey || !row?.dataset.key) return;
+    e.preventDefault();
+    const key = dragKey;
+    dragKey = '';
+    clearDrop();
+    moveProduct(key, row.dataset.key, afterRow(e, row));
+  });
+  list.addEventListener('dragend', () => { dragKey = ''; clearDrop(); });
+}
+
 function bind(): void {
+  bindReordering();
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-view]')) {
     tab.addEventListener('click', () => {
+      if (view !== tab.dataset.view) editingOrder = false;
       view = tab.dataset.view as View;
       render();
     });
@@ -449,7 +586,7 @@ function bind(): void {
     render();
   });
   $<HTMLSelectElement>('sort').addEventListener('change', e => {
-    sort = (e.target as HTMLSelectElement).value as Sort;
+    setSort((e.target as HTMLSelectElement).value as Sort);
     render();
   });
 
@@ -502,7 +639,7 @@ function bind(): void {
 
   // Sổ được cập nhật mỗi vài giờ từ Chrome: quay lại tab thì tải bản mới nếu đã cũ.
   const refresh = () => {
-    if (document.hidden || Date.now() - loadedAt < REFETCH_AFTER_MS) return;
+    if (document.hidden || dragKey || Date.now() - loadedAt < REFETCH_AFTER_MS) return;
     void load();
   };
   document.addEventListener('visibilitychange', refresh);
@@ -510,7 +647,7 @@ function bind(): void {
 
   document.addEventListener('keydown', e => {
     const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;
-    if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && view !== 'connect') {
+    if (e.key === '/' && !editingOrder && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && view !== 'connect') {
       e.preventDefault();
       $('search').focus();
     }
