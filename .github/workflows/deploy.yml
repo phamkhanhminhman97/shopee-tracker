@@ -33,8 +33,17 @@ jobs:
       - name: Run verification (check, test, build)
         run: npm run verify
 
+      - name: Check Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error title=Missing Secret::Thieu CLOUDFLARE_API_TOKEN trong GitHub Secrets. Hay vao https://github.com/phamkhanhminhman97/shopee-tracker/settings/secrets/actions them secret CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || '56c64f0be9db7565f16a83216fc548c3' }}
