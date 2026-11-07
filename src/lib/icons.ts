@@ -1,5 +1,6 @@
 // Biểu tượng Phosphor (regular, MIT) dùng chung kho với websites/memories. Mỗi giá trị là phần bên trong của viewBox 0 0 256 256.
 export const ICONS: Record<string, string> = {
+  'caret-right': '<path d="M101.66,42.34l80,80a8,8,0,0,1,0,11.32l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32Z"/>',
   'caret-up': '<path d="M213.66,154.34l-80-80a8,8,0,0,0-11.32,0l-80,80a8,8,0,0,0,11.32,11.32L128,91.31l74.34,74.35a8,8,0,0,0,11.32-11.32Z"/>',
   'grip': '<circle cx="92" cy="48" r="12"/><circle cx="164" cy="48" r="12"/><circle cx="92" cy="128" r="12"/><circle cx="164" cy="128" r="12"/><circle cx="92" cy="208" r="12"/><circle cx="164" cy="208" r="12"/>',
   'magnifying-glass': '<path d="M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"/>',

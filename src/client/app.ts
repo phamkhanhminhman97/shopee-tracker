@@ -20,6 +20,7 @@ const STALE_HOURS = 8;
 const REFETCH_AFTER_MS = 60_000;
 const ORDER_KEY = 'shopee-tracker:order';
 const SORT_KEY = 'shopee-tracker:sort';
+const desktop = window.matchMedia('(min-width: 900px)');
 const SOURCE_LABELS: Record<string, string> = {
   'chrome-initial-sync': 'Lần đầu',
   'chrome-alarm': 'Tự động',
@@ -119,7 +120,7 @@ function renderOrderToolbar(): void {
   if (!enabled) editingOrder = false;
   $('order-toolbar').hidden = !enabled;
   $('order-help').hidden = !editingOrder;
-  $('ledger-toolbar').classList.toggle('is-editing', editingOrder);
+  $('edit-order').classList.toggle('is-editing', editingOrder);
   $('edit-order').textContent = editingOrder ? 'Xong' : 'Đổi vị trí';
   $<HTMLSelectElement>('sort').value = sort;
 }
@@ -131,6 +132,7 @@ function renderChrome(): void {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-view]')) {
     tab.setAttribute('aria-pressed', String(tab.dataset.view === view));
   }
+  $('connect-toggle').textContent = view === 'connect' ? 'Về danh sách' : 'Kết nối';
 
   let message: string;
   let stale = false;
@@ -176,21 +178,25 @@ function renderRow({ item, deal }: Row, index: number, list: Row[]): string {
       <button type="button" class="icbtn" data-move="up" aria-label="Đưa lên: ${name}"${index === 0 ? ' disabled' : ''}>${icon('caret-up')}</button>
       <button type="button" class="icbtn" data-move="down" aria-label="Đưa xuống: ${name}"${index === list.length - 1 ? ' disabled' : ''}>${icon('caret-down')}</button>
     </div>`
-    : `<div class="actions">
-      <button type="button" class="btn row-open" data-open="${esc(item.cartKey)}" aria-label="Giá canh và lịch sử: ${name}">Giá canh</button>
-      <a class="icbtn product-link" href="${esc(item.productUrl)}" target="_blank" rel="noreferrer" aria-label="Mở trên Shopee: ${esc(item.title)}" title="Mở trên Shopee">${icon('arrow-square-out')}</a>
-    </div>`;
+    : '';
+  const current = desktop.matches && dialogKey === item.cartKey ? ' aria-current="true"' : '';
+  const open = editingOrder ? '<div class="pick">'
+    : '<button type="button" class="pick" data-open="' + esc(item.cartKey) + '" aria-label="Xem ' + name + ', ' + formatVnd(item.effectivePrice) + '"' +
+      (desktop.matches ? current + ' aria-controls="inspector"' : ' aria-haspopup="dialog"') + '>';
+  const close = editingOrder ? '</div>' : '</button>';
   return `<article class="row${deal.isWorth ? ' is-worth' : ''}" data-key="${esc(item.cartKey)}">
+    ${open}
     ${thumb}
-    <div class="body">
-      <h2 class="name">${esc(item.title)}</h2>
-      <p class="item-meta" title="${esc(meta)}">${esc(meta)}</p>
-    </div>
-    <div class="price-box">
-      <div class="price">${formatVnd(item.effectivePrice)}${deal.channel === 'Shopee Live' && deal.kind !== 'live' && status ? '<span class="price-channel">Live</span>' : ''}</div>
-      ${status ? '<p class="item-status' + (deal.isWorth ? ' is-deal' : '') + '">' + esc(status) + '</p>'
-        : priceNote ? '<p class="price-note">' + esc(priceNote) + '</p>' : ''}
-    </div>
+    <span class="body">
+      <span class="name">${esc(item.title)}</span>
+      <span class="item-meta" title="${esc(meta)}">${esc(meta)}</span>
+    </span>
+    <span class="price-box">
+      <span class="price">${formatVnd(item.effectivePrice)}${deal.channel === 'Shopee Live' && deal.kind !== 'live' && status ? '<span class="price-channel">Live</span>' : ''}</span>
+      ${!editingOrder && (status || priceNote) ? '<span class="price-note">' + esc(status || priceNote) + '</span>' : ''}
+    </span>
+    ${editingOrder ? '' : '<span class="pick-caret">' + icon('caret-right') + '</span>'}
+    ${close}
     ${actions}
   </article>`;
 }
@@ -274,7 +280,7 @@ function renderConnect(): void {
         </table></div>
       </section>`
     : '';
-  $('connect').innerHTML = `<div class="panels">${setup}${telegram}</div>${table}`;
+  $('connect').innerHTML = `<h2 class="connect-title">Kết nối</h2><div class="panels">${setup}${telegram}</div>${table}`;
 
   const test = $<HTMLButtonElement>('telegram-test');
   updateTelegramFeedback();
@@ -306,15 +312,32 @@ function updateTelegramFeedback(): void {
   feedback.textContent = telegramFeedback;
 }
 
+function syncInspector(): void {
+  if (!desktop.matches || view === 'connect') return;
+  const selected = data?.items.find(item => item.cartKey === dialogKey);
+  if (selected) {
+    renderQuote(selected);
+    redrawChart?.();
+  } else {
+    clearDetail();
+    const first = rows()[0];
+    if (first) void openDialog(first.item.cartKey);
+  }
+}
+
 function render(): void {
   renderChrome();
   renderOrderToolbar();
   const connect = view === 'connect';
   $('ledger').hidden = connect;
   $('tools').hidden = connect || editingOrder;
+  $('sort-tools').hidden = connect || editingOrder;
   $('connect').hidden = !connect;
   if (connect) renderConnect();
-  else renderList();
+  else {
+    renderList();
+    syncInspector();
+  }
 }
 
 async function load(): Promise<void> {
@@ -350,7 +373,7 @@ async function load(): Promise<void> {
   if (focused && !focused.isConnected) {
     const target = rowSelector ? document.querySelector<HTMLElement>(rowSelector + ' ' + control) : $(focused.id);
     if (target instanceof HTMLElement) target.focus({ preventScroll: true });
-    else document.querySelector<HTMLElement>('[data-view="' + view + '"]')?.focus({ preventScroll: true });
+    else (document.querySelector<HTMLElement>('[data-view="' + view + '"]') ?? $('connect-toggle')).focus({ preventScroll: true });
   }
 }
 
@@ -401,18 +424,65 @@ function renderChart(series: PricePoint[], item: TrackedItem, W: number): string
   </svg>`;
 }
 
-async function openDialog(key: string): Promise<void> {
+function clearDetail(): void {
+  dialogKey = null;
+  redrawChart = null;
+  $('detail').hidden = true;
+  $('inspector-empty').hidden = false;
+}
+
+function placeDetail(): void {
+  const dialog = $<HTMLDialogElement>('dialog');
+  const detail = $('detail');
+  const host = desktop.matches ? $('inspector') : dialog;
+  if (detail.parentElement === host) return;
+  if (desktop.matches) {
+    if (dialog.open) dialog.close();
+    host.append(detail);
+    $('inspector-empty').hidden = Boolean(dialogKey);
+  } else {
+    host.append(detail);
+    clearDetail();
+  }
+}
+
+function renderQuote(item: TrackedItem): void {
+  const deal = evaluateDeal(item);
+  $('current-price-label').textContent = deal.channel === 'Shopee Live' ? 'Giá Shopee Live' : 'Giá hiện tại';
+  $('current-price').textContent = formatVnd(item.effectivePrice);
+  $('current-price').classList.toggle('is-deal', deal.isWorth);
+  $('current-reason').textContent = deal.reason;
+  $('current-reason').hidden = !deal.reason;
+  $('jump-target').textContent = item.targetPrice === null ? 'Đặt giá canh' : 'Sửa giá canh';
+}
+
+async function openDialog(key: string, keyboard = false): Promise<void> {
   const item = data?.items.find(i => i.cartKey === key);
   if (!item) return;
+  placeDetail();
+  if (desktop.matches && key === dialogKey) {
+    if (keyboard) $('dialog-title').focus({ preventScroll: true });
+    return;
+  }
   dialogKey = key;
+  $('detail').hidden = false;
+  $('inspector-empty').hidden = true;
+  if (desktop.matches) {
+    document.querySelector('[data-open][aria-current]')?.removeAttribute('aria-current');
+    document.querySelector('[data-open="' + CSS.escape(key) + '"]')?.setAttribute('aria-current', 'true');
+  }
 
   $('dialog-title').textContent = item.title;
-  $('dialog-sub').textContent = [item.shopName, item.variation && 'Phân loại ' + item.variation, 'Hiện tại ' + formatVnd(item.effectivePrice)]
+  $('dialog-sub').textContent = [item.shopName, item.variation]
     .filter(Boolean)
     .join(' · ');
+  $('detail-image').innerHTML = item.imageUrl
+    ? '<img class="thumb" src="' + esc(thumbUrl(item.imageUrl)) + '" alt="" width="56" height="56" referrerpolicy="no-referrer" />'
+    : '<span class="thumb" aria-hidden="true"></span>';
+  $<HTMLAnchorElement>('product-link').href = item.productUrl;
+  renderQuote(item);
   const deal = evaluateDeal(item);
   const notes = [
-    deal.reason,
     deal.channel === 'Shopee Live' ? 'Giá giỏ thường: ' + formatVnd(item.unitPrice) : '',
     item.minEffectivePrice < item.effectivePrice ? 'Thấp nhất từng ghi nhận: ' + formatVnd(item.minEffectivePrice) : '',
     item.voucherHint, item.flashSaleText, item.cartDropBadge,
@@ -420,8 +490,7 @@ async function openDialog(key: string): Promise<void> {
   const productNotes = $('product-notes');
   productNotes.hidden = !notes.length;
   productNotes.innerHTML = notes.map(note => '<li>' + esc(localizeShopeeNote(note)) + '</li>').join('');
-  $('chart-legend').textContent =
-    'Theo dõi từ ' + shortDate(item.firstSeenAt) + '. Nét đậm là giá mua tốt nhất, nét đứt là giá giỏ thường.';
+  $('chart-legend').textContent = 'Nét liền: giá mua tốt nhất · Nét đứt: giá giỏ';
   $<HTMLInputElement>('target').value = item.targetPrice ? String(item.targetPrice) : '';
   $<HTMLInputElement>('mute').checked = item.alertMuted;
   $('dialog-feedback').textContent = '';
@@ -448,7 +517,14 @@ async function openDialog(key: string): Promise<void> {
     chart.innerHTML = renderChart(points, current, Math.max(1, chart.clientWidth));
   };
   redrawChart = draw;
-  $<HTMLDialogElement>('dialog').showModal();
+  if (desktop.matches) {
+    $('inspector').scrollTop = 0;
+    if (keyboard) $('dialog-title').focus({ preventScroll: true });
+  } else {
+    const dialog = $<HTMLDialogElement>('dialog');
+    dialog.showModal();
+    dialog.scrollTop = 0;
+  }
 
   try {
     const res = await fetch('/api/items/' + encodeURIComponent(key) + '/history', { signal: AbortSignal.timeout(15_000) });
@@ -466,7 +542,7 @@ async function saveSettings(): Promise<void> {
   const key = dialogKey;
   const draw = redrawChart;
   const dialog = $<HTMLDialogElement>('dialog');
-  const sameDialog = () => dialog.open && redrawChart === draw;
+  const sameDialog = () => (desktop.matches || dialog.open) && redrawChart === draw;
   const save = $<HTMLButtonElement>('save');
   if (!key || save.disabled) return;
   const feedback = $('dialog-feedback');
@@ -582,6 +658,28 @@ function bindReordering(): void {
 
 function bind(): void {
   bindReordering();
+  placeDetail();
+  desktop.addEventListener('change', () => {
+    placeDetail();
+    for (const row of document.querySelectorAll<HTMLElement>('[data-open]')) {
+      if (desktop.matches) {
+        row.removeAttribute('aria-haspopup');
+        row.setAttribute('aria-controls', 'inspector');
+        if (row.dataset.open === dialogKey) row.setAttribute('aria-current', 'true');
+      } else {
+        row.removeAttribute('aria-controls');
+        row.removeAttribute('aria-current');
+        row.setAttribute('aria-haspopup', 'dialog');
+      }
+    }
+    syncInspector();
+  });
+  $('connect-toggle').addEventListener('click', () => {
+    view = view === 'connect' ? 'cart' : 'connect';
+    editingOrder = false;
+    render();
+    window.scrollTo(0, 0);
+  });
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-view]')) {
     tab.addEventListener('click', () => {
       if (view !== tab.dataset.view) editingOrder = false;
@@ -602,7 +700,7 @@ function bind(): void {
   $('list').addEventListener('click', e => {
     const target = (e.target as HTMLElement).closest<HTMLElement>('[data-open], [data-action]');
     if (!target) return;
-    if (target.dataset.open) void openDialog(target.dataset.open);
+    if (target.dataset.open) void openDialog(target.dataset.open, e.detail === 0);
     else if (target.dataset.action === 'retry') void load();
     else if (target.dataset.action === 'connect') {
       view = 'connect';
@@ -613,17 +711,20 @@ function bind(): void {
       render();
     }
   });
-  $('list').addEventListener('error', e => {
+  const hideBrokenImage = (e: Event) => {
     if (!(e.target instanceof HTMLImageElement)) return;
     const placeholder = document.createElement('span');
     placeholder.className = 'thumb';
     placeholder.setAttribute('aria-hidden', 'true');
     e.target.replaceWith(placeholder);
-  }, true);
+  };
+  $('list').addEventListener('error', hideBrokenImage, true);
+  $('detail-image').addEventListener('error', hideBrokenImage, true);
 
   const dialog = $<HTMLDialogElement>('dialog');
   new ResizeObserver(() => redrawChart?.()).observe($('chart'));
   $('dialog-close').addEventListener('click', () => dialog.close());
+  $('jump-target').addEventListener('click', () => $('target').focus());
   let startedOnBackdrop = false;
   dialog.addEventListener('pointerdown', e => { startedOnBackdrop = e.target === dialog; });
   dialog.addEventListener('click', e => {
@@ -631,11 +732,10 @@ function bind(): void {
     startedOnBackdrop = false;
   });
   dialog.addEventListener('close', () => {
-    if (dialog.open) return;
+    if (dialog.open || desktop.matches) return;
     // Danh sách được vẽ lại sau khi lưu, nên tìm lại nút theo mã món thay vì giữ nút cũ.
     const key = dialogKey;
-    dialogKey = null;
-    redrawChart = null;
+    clearDetail();
     if (key) document.querySelector<HTMLElement>('[data-open="' + CSS.escape(key) + '"]')?.focus();
   });
   $('presets').addEventListener('click', e => {
@@ -657,6 +757,9 @@ function bind(): void {
 
   document.addEventListener('keydown', e => {
     const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;
+    if (e.key === 'Escape' && desktop.matches && dialogKey && $('detail').contains(document.activeElement)) {
+      document.querySelector<HTMLElement>('[data-open="' + CSS.escape(dialogKey) + '"]')?.focus();
+    }
     if (e.key === '/' && !editingOrder && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && view !== 'connect') {
       e.preventDefault();
       $('search').focus();

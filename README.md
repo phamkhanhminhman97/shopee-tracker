@@ -10,7 +10,9 @@ Thiết kế: [DESIGN.md](DESIGN.md). Tiến độ rà soát: [KE-HOACH.md](KE-H
 2. **Worker + D1 (`src/worker/`):** giữ lịch sử riêng theo phân loại. Tiện ích thử lại nếu có dòng không đọc được. Khi một món vắng mặt, Worker chờ bản chụp xác nhận cùng danh sách trong một giờ. Giá mới, lịch sử và hàng chờ Telegram được ghi cùng giao dịch. Worker kiểm tra mỗi giờ và gửi Telegram khi quá 9 giờ chưa nhận lượt quét thành công, rồi báo một lần khi đồng bộ lại.
 3. **Web (`src/pages`, `src/client`):** danh sách giá, tab Đáng chốt, đặt giá canh và biểu đồ lịch sử cho từng món, tab Kết nối (Telegram và nhật ký quét).
 
-Ở **Giỏ hàng**, bấm **Đổi vị trí**, kéo món hoặc dùng mũi tên lên/xuống rồi bấm **Xong**. Chọn **Tự sắp xếp** để xem lại thứ tự đã lưu trên trình duyệt. Thứ tự này chỉ áp dụng trong sổ canh giá.
+Chọn một món để xem giá, lịch sử và nút **Đặt giá canh**. Desktop hiện chi tiết bên cạnh danh sách; điện thoại mở ngăn chi tiết từ dưới. Mục **Kết nối** giữ trạng thái Telegram và nhật ký quét.
+
+Ở tab **Tất cả**, bấm **Đổi vị trí**, kéo món hoặc dùng mũi tên lên/xuống rồi bấm **Xong**. Chọn **Tự sắp xếp** để xem lại thứ tự đã lưu trên trình duyệt. Thứ tự này chỉ áp dụng trong sổ canh giá.
 
 ## Khi nào báo Telegram (`src/lib/deal.ts`)
 

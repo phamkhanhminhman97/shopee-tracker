@@ -85,32 +85,53 @@ try {
   assert.deepEqual(manifest.icons.map(icon => icon.sizes), ['192x192', '512x512', '512x512']);
   assert.equal(manifest.icons[2].purpose, 'maskable');
   for (const icon of manifest.icons) assert.equal(await pngSize(icon.src), icon.sizes);
-  for (const [width, height] of [[320, 700], [390, 844], [768, 820], [844, 390], [1440, 900]]) {
+  for (const [width, height] of [[320, 700], [390, 844], [768, 820], [844, 390], [1024, 800], [1440, 900]]) {
     await page.setViewport({ width, height });
     await page.goto(address);
     await page.waitForSelector('.row');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Tràn ngang ở ' + width);
     if (width === 844) assert.equal(await page.$eval('.bar', el => getComputedStyle(el).position), 'static');
     const layout = await page.evaluate(() => {
-      const [first, second] = document.querySelectorAll('.row');
-      const box = (row, selector) => row.querySelector(selector).getBoundingClientRect();
-      const prices = [first, second].map(row => box(row, '.price-box'));
-      const button = box(first, '.row-open');
-      const controls = [...document.querySelectorAll('#ledger-toolbar button, #ledger-toolbar input, #ledger-toolbar select, .row:first-child button, .row:first-child a')];
+      const row = document.querySelector('.row:first-child');
+      const button = row.querySelector('[data-open]').getBoundingClientRect();
+      const price = row.querySelector('.price-box').getBoundingClientRect();
+      const controls = [...document.querySelectorAll('#search, #sort, #edit-order, #connect-toggle, .views button, .row:first-child button')];
       const touchTargets = controls.every(el => {
         const rect = el.getBoundingClientRect();
         return rect.width >= 44 && rect.height >= 44;
       });
       return {
-        samePriceColumn: Math.abs(prices[0].right - prices[1].right) < 1,
-        priceBesideAction: prices[0].bottom >= button.top && prices[0].top <= button.bottom && prices[0].right <= button.left,
+        priceInsideButton: price.left >= button.left && price.right <= button.right && price.top >= button.top && price.bottom <= button.bottom,
+        desktopInspector: document.querySelector('#inspector').getBoundingClientRect().width > 0,
+        modalOpen: document.querySelector('#dialog').open,
         touchTargets,
       };
     });
-    assert.ok(layout.samePriceColumn && layout.priceBesideAction && layout.touchTargets, 'Giá và thao tác lệch ở ' + width);
+    assert.ok(layout.priceInsideButton && layout.touchTargets, 'Giá hoặc vùng chạm không vừa ở ' + width);
+    assert.equal(layout.desktopInspector, width >= 900);
+    assert.equal(layout.modalOpen, false);
   }
   assert.equal(await pngSize(await page.$eval('link[rel="apple-touch-icon"]', el => el.href)), '180x180');
   await page.waitForSelector('.row:first-child span.thumb');
+  await page.waitForSelector('#inspector #chart svg');
+  const inspectorStartsAt = await page.evaluate(() => document.querySelector('#inspector').getBoundingClientRect().left);
+  assert.ok(inspectorStartsAt > await page.$eval('.watchlist', el => el.getBoundingClientRect().right));
+  assert.equal(await page.$eval('#inspector #dialog-title', el => el.textContent), fixture.title);
+  await page.focus('.row:nth-child(2) [data-open]');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'dialog-title');
+  assert.match(await page.$eval('#inspector #dialog-sub', el => el.textContent), /Phân loại 0/);
+  assert.equal(await page.$eval('#dialog', el => el.open), false);
+  await page.click('#jump-target');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'target');
+  await page.keyboard.press('Escape');
+  assert.ok(await page.evaluate(() => document.activeElement.hasAttribute('data-open')));
+  await page.setViewport({ width: 1024, height: 640 });
+  assert.equal(await page.$eval('#inspector', el => getComputedStyle(el).position), 'sticky');
+  await page.$eval('#inspector', el => { el.scrollTop = el.scrollHeight; });
+  await page.click('.row:nth-child(3) [data-open]');
+  assert.equal(await page.$eval('#inspector', el => el.scrollTop), 0);
+  await page.setViewport({ width: 1440, height: 900 });
 
   await page.evaluate(() => {
     const row = document.querySelectorAll('.row')[12];
@@ -127,8 +148,12 @@ try {
     assert.equal(focusVisible, true, 'Thanh đầu trang không được che focus khi Shift+Tab');
   }
 
+  const sameRow = await page.$('[data-open]');
   await page.setViewport({ width: 320, height: 700 });
+  await page.waitForFunction(el => el.isConnected && el.getAttribute('aria-haspopup') === 'dialog', {}, sameRow);
   await page.click('[data-open]');
+  await page.waitForSelector('#dialog[open] #detail');
+  await page.waitForFunction(() => Math.abs(document.querySelector('#dialog').getBoundingClientRect().bottom - innerHeight) <= 2);
   await page.waitForFunction(() => document.querySelector('#chart svg')?.getAttribute('aria-label').includes('499.000'));
   assert.match(await page.$eval('#product-notes', el => el.textContent), /Voucher shop giảm đến 60k₫/);
   const chart = await page.$eval('#chart svg', el => ({ width: el.clientWidth, view: el.viewBox.baseVal.width }));
@@ -187,12 +212,14 @@ try {
 
   fixture.title = 'Tên món sau lần cập nhật';
   await page.evaluate(() => window.runRefresh());
-  await page.waitForFunction(() => document.querySelector('.row h2')?.textContent === 'Tên món sau lần cập nhật');
+  await page.waitForFunction(() => document.querySelector('.row .name')?.textContent === 'Tên món sau lần cập nhật');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.open), fixture.cartKey);
 
-  await page.click('[data-view="connect"]');
-  assert.equal(await page.$eval('[data-view="connect"]', el => el.getAttribute('aria-pressed')), 'true');
+  await page.click('#connect-toggle');
+  assert.equal(await page.$eval('#connect-toggle', el => el.textContent), 'Về danh sách');
   assert.ok(await page.$eval('.table-wrap', el => el.scrollWidth <= el.clientWidth), 'Nhật ký 320 px phải đọc được không cuộn ngang');
+  await page.click('#connect-toggle');
+  assert.equal(await page.$eval('#ledger', el => el.hidden), false);
 
   await page.setViewport({ width: 320, height: 700, isMobile: true, hasTouch: true });
   await page.goto(address);
@@ -233,7 +260,7 @@ try {
   assert.deepEqual((await keys()).slice(0, 3), [initial[0], initial[2], initial[1]]);
 
   assert.deepEqual(errors, []);
-  console.log('PASS: 5 khung màn hình, trục thời gian, focus, nút đổi vị trí, kéo thả và thứ tự sau tải lại');
+  console.log('PASS: 6 khung màn hình, chi tiết bên cạnh và ngăn dưới, giá canh, focus và đổi vị trí');
 } finally {
   await browser?.close();
   server.close();

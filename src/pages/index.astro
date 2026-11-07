@@ -26,70 +26,105 @@ import { ICONS } from '../lib/icons.ts';
     <header class="bar">
       <div class="bar-in">
         <div class="identity">
-          <h1 class="brand">Sổ Canh Giá Shopee</h1>
-          <p id="sync-meta" class="summary" role="status">Đang tải...</p>
+          <img class="brand-mark" src="/favicon.svg" alt="" width="32" height="32" />
+          <div>
+            <h1 class="brand">Sổ Canh Giá Shopee</h1>
+            <p id="sync-meta" class="summary" role="status">Đang tải...</p>
+          </div>
         </div>
-        <nav class="views" aria-label="Chế độ xem">
-          <button type="button" data-view="cart" aria-pressed="true">Giỏ hàng <span class="n" id="count-cart"></span></button>
-          <button type="button" data-view="worth" aria-pressed="false">Đáng chốt <span class="n is-deal" id="count-worth"></span></button>
-          <button type="button" data-view="connect" aria-pressed="false">Kết nối</button>
-        </nav>
+        <button id="connect-toggle" class="btn" type="button" aria-controls="connect">Kết nối</button>
       </div>
     </header>
 
     <main id="main" class="content" tabindex="-1">
-      <div id="ledger">
-        <div id="ledger-toolbar" class="ledger-toolbar">
-          <div id="tools" class="tools">
+      <div id="ledger" class="workspace">
+        <section class="watchlist" aria-labelledby="list-title">
+          <div class="list-heading">
+            <h2 id="list-title">Món đang canh</h2>
+            <div id="order-toolbar" hidden>
+              <button id="edit-order" type="button" class="btn" aria-controls="list">Đổi vị trí</button>
+            </div>
+          </div>
+          <div id="tools">
             <div class="search">
               <label for="search" class="vh">Tìm món hoặc shop</label>
               <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['magnifying-glass']} />
               <input id="search" type="search" class="input" placeholder="Tìm món hoặc shop" autocomplete="off" />
               <kbd aria-hidden="true">/</kbd>
             </div>
-            <div class="sel">
+          </div>
+          <div class="filter-row">
+            <nav class="views" aria-label="Lọc theo trạng thái giá">
+              <button type="button" data-view="cart" aria-pressed="true">Tất cả <span class="n" id="count-cart"></span></button>
+              <button type="button" data-view="worth" aria-pressed="false">Đáng chốt <span class="n is-deal" id="count-worth"></span></button>
+            </nav>
+            <div id="sort-tools" class="sel">
               <label for="sort" class="vh">Sắp xếp</label>
               <select id="sort" class="input">
                 <option value="deal">Ưu tiên giá tốt</option>
                 <option value="cart">Thứ tự trong giỏ</option>
-                <option value="price">Giá thấp đến cao</option>
+                <option value="price">Giá thấp trước</option>
                 <option value="manual">Tự sắp xếp</option>
               </select>
               <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['caret-down']} />
             </div>
           </div>
-          <div id="order-toolbar" class="order-toolbar" hidden>
-            <p id="order-help" class="small muted" hidden><span class="drag-copy">Kéo món hoặc dùng mũi tên lên/xuống.</span><span class="touch-copy">Dùng mũi tên lên/xuống.</span> Thứ tự lưu trên trình duyệt này.</p>
-            <button id="edit-order" type="button" class="btn" aria-controls="list">Đổi vị trí</button>
-          </div>
-        </div>
-        <p id="order-status" class="vh" role="status"></p>
-        <div id="list"></div>
+          <p id="order-help" class="order-help small muted" hidden><span class="drag-copy">Kéo món hoặc dùng mũi tên lên/xuống.</span><span class="touch-copy">Dùng mũi tên lên/xuống.</span> Thứ tự lưu trên trình duyệt này.</p>
+          <p id="order-status" class="vh" role="status"></p>
+          <div id="list"></div>
+        </section>
+        <aside id="inspector" class="inspector" aria-label="Chi tiết sản phẩm">
+          <div id="inspector-empty" class="inspector-empty"><p>Chọn một món để xem lịch sử và đặt giá canh.</p></div>
+        </aside>
       </div>
       <div id="connect" hidden></div>
     </main>
 
     <dialog id="dialog" class="dialog" aria-labelledby="dialog-title">
-      <div class="dialog-body">
-        <div class="dialog-head">
-          <div>
-            <h2 id="dialog-title" class="dialog-title"></h2>
-            <p id="dialog-sub" class="muted"></p>
+      <article id="detail" class="detail" hidden>
+        <header class="detail-head">
+          <div class="detail-identity">
+            <div id="detail-image" class="detail-image"></div>
+            <div>
+              <h2 id="dialog-title" class="dialog-title" tabindex="-1"></h2>
+              <p id="dialog-sub" class="muted"></p>
+            </div>
           </div>
-          <button id="dialog-close" type="button" class="icbtn" aria-label="Đóng">
+          <button id="dialog-close" type="button" class="icbtn" aria-label="Đóng chi tiết">
             <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['x']} />
           </button>
+        </header>
+
+        <div class="quote">
+          <div>
+            <p id="current-price-label" class="small muted">Giá hiện tại</p>
+            <p id="current-price" class="current-price"></p>
+            <p id="current-reason" class="current-reason small" hidden></p>
+          </div>
+          <div class="quote-actions">
+            <button id="jump-target" class="btn primary" type="button">Đặt giá canh</button>
+            <a id="product-link" class="btn" target="_blank" rel="noreferrer">Mở Shopee
+              <svg class="i" viewBox="0 0 256 256" aria-hidden="true" set:html={ICONS['arrow-square-out']} />
+            </a>
+          </div>
         </div>
 
-        <div class="chart-box">
-          <p id="chart-legend" class="muted small"></p>
-          <p id="chart-range" class="small"></p>
-          <div id="chart"></div>
-        </div>
-        <ul id="product-notes" class="product-notes muted small" hidden></ul>
+        <section class="detail-section" aria-labelledby="history-title">
+          <div class="section-heading">
+            <h3 id="history-title">Lịch sử giá</h3>
+            <p id="chart-range" class="small muted"></p>
+          </div>
+          <div class="chart-box">
+            <div id="chart"></div>
+            <p id="chart-legend" class="small muted"></p>
+          </div>
+          <ul id="product-notes" class="product-notes muted small" hidden></ul>
+        </section>
 
-        <form id="target-form">
-          <label for="target" class="label">Báo Telegram khi giá về mức (VNĐ)</label>
+        <form id="target-form" class="detail-section">
+          <h3>Giá canh</h3>
+          <div class="target-entry">
+            <label for="target" class="label small">Báo Telegram khi giá về mức (VNĐ)</label>
           <input
             id="target"
             type="text"
@@ -99,13 +134,16 @@ import { ICONS } from '../lib/icons.ts';
             placeholder="350000"
             aria-describedby="target-help"
           />
+          </div>
           <p id="target-help" class="small muted">Để trống nếu chỉ muốn nhận báo đáy giá giỏ hoặc ưu đãi Live.</p>
           <div id="presets" class="presets"></div>
-          <label class="check"><input id="mute" type="checkbox" /> Tắt báo Telegram cho món này</label>
+          <div class="target-actions">
+            <label class="check"><input id="mute" type="checkbox" /> Tắt báo Telegram cho món này</label>
+            <button id="save" type="submit" class="btn">Lưu giá canh</button>
+          </div>
           <p id="dialog-feedback" class="feedback" role="status" aria-live="polite"></p>
-          <button id="save" type="submit" class="btn primary">Lưu</button>
         </form>
-      </div>
+      </article>
     </dialog>
 
     <script>

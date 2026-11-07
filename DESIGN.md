@@ -24,13 +24,13 @@ Bản cũ (nền giấy ấm, đỏ gạch, xanh rêu, Manrope, nút chuyển ch
 | Chữ | Geist 400/500/600 tự host (có tiếng Việt), số tabular | Cột giá thẳng hàng; không tải phông từ bên thứ ba (CSP `font-src 'self'`) |
 | Thang chữ | 12/16, 14/20, 20/28, 24/32 | Cùng thang với memories |
 | Khoảng cách, bo góc | Biến `--s-*` (2 đến 96 px), `--r-*` (4, 6, 8, 12) | Không có giá trị lẻ |
-| Bố cục | Tên và thời gian cập nhật nằm cạnh điều hướng. Tìm, sắp xếp và đổi vị trí ở ngay trên danh sách | Đầu trang gọn và các nút tác động đến danh sách nằm cùng chỗ |
-| Dòng sản phẩm | Ảnh, tên và phân loại; cột giá căn phải trên desktop; nút Giá canh và biểu tượng mở Shopee | Tên và giá được đọc trước; nút Giá canh mở lịch sử, voucher và ghi chú khuyến mãi |
-| Điểm nhấn | Giá và lý do đáng chốt dùng chữ hổ phách, không bao quanh mỗi ghi chú bằng viền | Món đáng chốt có chữ giải thích và giá để so trực tiếp |
+| Bố cục | Danh sách bên trái và chi tiết món đang chọn bên phải trên desktop; điện thoại có danh sách và ngăn chi tiết từ dưới | Đổi món liên tục mà không đóng mở hộp trên desktop; điện thoại dùng trọn chiều rộng |
+| Dòng sản phẩm | Cả dòng là một nút: ảnh, tên, phân loại, giá và dấu mở chi tiết | Một thao tác đủ mở món; đặt giá canh, mở Shopee và voucher nằm trong chi tiết |
+| Điểm nhấn | Giá và lý do đáng chốt dùng chữ hổ phách. Món đang chọn có nền riêng và dấu mở được nhấn | So giá nhanh, vẫn có nhãn giải thích ưu đãi |
 | Biểu tượng | Phosphor regular nhúng SVG: tìm, đóng, mở ngoài, mũi tên chọn, chuông tắt, cảnh báo, xu hướng giảm, gắn kết | Cùng kho với memories, giấy phép ở `PHOSPHOR_LICENSE.txt` |
 | Ảnh sản phẩm | Bản `_tn` của Shopee (320 px) | Đã kiểm 25/25 ảnh trong giỏ trả 200; tổng 639 KB thay vì 11,2 MB |
 | Trạng thái | Khung xương khi tải, thông báo lỗi có nút Tải lại, sổ rỗng có nút tới hướng dẫn, cảnh báo quá 8 giờ chưa đồng bộ | Không có vòng quay |
-| Chuyển động | Nút lún `scale(.98)`, hộp thoại hiện 180 ms, khung xương nhấp nháy opacity; tắt khi bật giảm chuyển động | Phản hồi thao tác, không có gì chạy nền |
+| Chuyển động | Nút lún `scale(.98)`, ngăn chi tiết trượt nhẹ từ dưới, khung xương nhấp nháy opacity; tắt khi bật giảm chuyển động | Phản hồi thao tác, không có gì chạy nền |
 | Cấm | Gradient nền, kính mờ, bóng đổ trang trí (theo memories), vạch màu ở mép trái dòng | Các dấu hiệu quen thuộc của giao diện AI chung chung |
 
 ## Độ tương phản (đo bằng `contrast-check.py`)
@@ -51,9 +51,9 @@ Sáng, viền điều khiển trên thanh trên cùng (`#EBEBEB`): 3,10. Chữ c
 
 ## Bố cục theo độ rộng
 
-1. **Từ 800 px:** mỗi dòng có ảnh, tên và phân loại, cột giá, rồi hai nút. Cột giá và nút thẳng hàng giữa các món.
-2. **640 đến 799 px:** giữ cột giá và thao tác, giảm kích thước ảnh và khoảng cách để chừa chỗ cho tên.
-3. **Dưới 640 px:** đầu trang không dính. Ảnh và tên ở hàng trên, giá và thao tác ở hàng dưới. Dưới 560 px, ô tìm dùng trọn một hàng; sắp xếp và đổi vị trí dùng chung hàng kế tiếp. Nhật ký quét có ba cột và ngắt dòng theo màn hình.
+1. **Từ 900 px:** hai vùng, khung chi tiết bám theo khi cuộn danh sách. Enter trên một món chuyển focus sang tiêu đề chi tiết; Escape trả focus về món đang chọn.
+2. **460 đến 899 px:** danh sách một cột, giá nằm bên phải tên. Chi tiết mở bằng ngăn dưới có nút đóng.
+3. **Dưới 460 px:** giá nằm dưới tên để tên và phân loại có đủ chỗ. Ngăn chi tiết đặt hai thao tác chính ngay dưới giá; đổi vị trí bằng mũi tên trên thiết bị cảm ứng.
 
 ## Đã bỏ
 
